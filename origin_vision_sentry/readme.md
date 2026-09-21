@@ -153,7 +153,7 @@ chmod +x autostart.sh
 
 ### 4.4 单模式程序
 
-四个入口共用同一套算法实现，只是强制运行模式不同。单模式程序不会打开用不到的相机/模型，避免抢 USB 设备。
+四个入口各自有真实主循环。自瞄 / 打符 / 全向写在独立任务类里，比赛主程序 `ovsentry_mpc.cpp` 直接调用这三个任务，所以改 `auto_aim_task` / `buff_task` / `omni_task` 会立刻作用到主程序。单模式程序不会构造用不到的任务，避免抢 USB 设备。
 
 | 程序 | 源文件 | 行为 |
 |------|--------|------|
@@ -315,7 +315,7 @@ chmod +x autostart.sh
    - `mpc_layout.xml` — 自瞄/MPC 曲线（`gimbal_yaw`、`mpc_yaw`、`ref_yaw` 等）
    - `buff_layout.xml` — 打符曲线（`buff_yaw`、`cmd_yaw`、`R_yaw` 等）
 
-代码中发送数据的字段见 `src/ovsentry/app.cpp` 的 `publish_telemetry()`。新增曲线只需往 `nlohmann::json data` 里加字段，再 `plotter.plot(data)` 即可。
+代码中发送数据的字段见 `src/ovsentry/runtime.cpp` 的 `publish_telemetry()`。新增曲线只需往 `nlohmann::json data` 里加字段，再 `plotter.plot(data)` 即可。
 
 ---
 
@@ -323,11 +323,15 @@ chmod +x autostart.sh
 
 ```
 origin_vision_sentry
-├── src/ovsentry_mpc.cpp        # 比赛主程序（自动切换自瞄/全向/打符）
+├── src/ovsentry_mpc.cpp        # 比赛主程序：编排自瞄 / 全向 / 打符
 ├── src/ovsentry_auto_aim.cpp   # 只跑自瞄
 ├── src/ovsentry_buff.cpp       # 只打符
 ├── src/ovsentry_omni.cpp       # 只跑全向感知
-├── src/ovsentry/               # 共用实现（配置、App 主循环、叠加层）
+├── src/ovsentry/
+│   ├── runtime.*               # 相机、云台、帧状态、打点与显示
+│   ├── auto_aim_task.*         # 自瞄任务（mpc 与 auto_aim 共用）
+│   ├── buff_task.*             # 打符任务（mpc 与 buff 共用）
+│   └── omni_task.*             # 全向任务（mpc 与 omni 共用）
 ├── configs/
 │   ├── sentry.yaml             # 哨兵主配置
 │   ├── calibration.yaml        # 标定配置

@@ -45,7 +45,10 @@ set(OVSENTRY_COMMON
     src/ovsentry/subscribers.cpp
     src/ovsentry/auto_aim_helpers.cpp
     src/ovsentry/overlay.cpp
-    src/ovsentry/app.cpp
+    src/ovsentry/runtime.cpp
+    src/ovsentry/auto_aim_task.cpp
+    src/ovsentry/buff_task.cpp
+    src/ovsentry/omni_task.cpp
 )
 set(OVSENTRY_LIBS ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff omniperception tools io io_ros2_gimbal fastcdr)
 

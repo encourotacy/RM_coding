@@ -27,21 +27,6 @@ inline const char * app_mode_name(AppMode mode)
   return "MPC";
 }
 
-inline bool uses_auto_aim_detect(AppMode mode)
-{
-  return mode == AppMode::AutoSwitch || mode == AppMode::AutoAim;
-}
-
-inline bool uses_buff(AppMode mode)
-{
-  return mode == AppMode::AutoSwitch || mode == AppMode::Buff;
-}
-
-inline bool uses_omni(AppMode mode)
-{
-  return mode == AppMode::AutoSwitch || mode == AppMode::Omni;
-}
-
 struct RuntimeConfig
 {
   AppMode mode = AppMode::AutoSwitch;
