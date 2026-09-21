@@ -138,7 +138,14 @@ else()
 endif()
 
 if(TARGET io_ros2_gimbal)
-    add_executable(ovsentry_omni_mpc src/ovsentry_omni_mpc.cpp)
+    add_executable(ovsentry_omni_mpc
+        src/ovsentry_omni_mpc.cpp
+        src/ovsentry/config.cpp
+        src/ovsentry/subscribers.cpp
+        src/ovsentry/auto_aim_helpers.cpp
+        src/ovsentry/overlay.cpp
+        src/ovsentry/app.cpp
+    )
     target_link_libraries(ovsentry_omni_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff omniperception tools io io_ros2_gimbal fastcdr)
 else()
     if(SENTRY_SPECIAL_MODE STREQUAL "OFF")
