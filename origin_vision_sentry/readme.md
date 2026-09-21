@@ -1,13 +1,13 @@
 # origin_vision_sentry
 
-哨兵机器人视觉程序，集成 **常规自瞄、打前哨站、全向感知、打符** 四大功能于单一主程序 `ovsentry_omni_mpc`。
+哨兵机器人视觉程序，集成 **常规自瞄、打前哨站、全向感知、打符**。比赛主程序 `ovsentry_mpc` 按电控/导航信号自动切换模式；调试时也可单独运行 `ovsentry_auto_aim`、`ovsentry_buff`、`ovsentry_omni`。
 基于 [sp_vision_25](https://github.com/TongjiSuperPower/sp_vision_25) 框架精简而来，仅保留哨兵所需模块。
 
 ---
 
 ## 1. 功能概述
 
-主程序 `src/ovsentry_omni_mpc.cpp` 根据电控/导航信号及目标类型自动切换工作模式。打前哨站与打车上装甲板虽共用 YOLO 识别与 Tracker 框架，但目标特性、估计、瞄准、开火逻辑均不同，作为两个独立功能处理：
+主程序 `src/ovsentry_mpc.cpp` 根据电控/导航信号及目标类型自动切换工作模式。打前哨站与打车上装甲板虽共用 YOLO 识别与 Tracker 框架，但目标特性、估计、瞄准、开火逻辑均不同，作为两个独立功能处理：
 
 ### 1.1 常规自瞄（打车上装甲板）
 
@@ -100,19 +100,19 @@ make -C build -j$(nproc)
 ### 4.1 直接运行
 
 ```bash
-./build/ovsentry_omni_mpc configs/sentry.yaml
+./build/ovsentry_mpc configs/sentry.yaml
 ```
 
-带画面显示（默认开启，四路相机拼接预览）：
+带画面显示（默认开启；比赛主程序为四路相机拼接预览）：
 
 ```bash
-./build/ovsentry_omni_mpc configs/sentry.yaml
+./build/ovsentry_mpc configs/sentry.yaml
 ```
 
 关闭显示（部署/自启用）：
 
 ```bash
-./build/ovsentry_omni_mpc configs/sentry.yaml --no-display
+./build/ovsentry_mpc configs/sentry.yaml --no-display
 ```
 
 ### 4.2 命令行参数
@@ -133,7 +133,7 @@ make -C build -j$(nproc)
 示例（临时指定相机路径）：
 
 ```bash
-./build/ovsentry_omni_mpc configs/sentry.yaml left=video0 right=video2 back=video4
+./build/ovsentry_mpc configs/sentry.yaml left=video0 right=video2 back=video4
 ```
 
 ### 4.3 开机自启
@@ -146,10 +146,27 @@ chmod +x autostart.sh
 `autostart.sh` 会在工程目录下用 screen 后台启动：
 
 ```bash
-./build/ovsentry_omni_mpc configs/sentry.yaml --no-display
+./build/ovsentry_mpc configs/sentry.yaml --no-display
 ```
 
 日志写入 `logs/` 目录。
+
+### 4.4 单模式程序
+
+四个入口共用同一套算法实现，只是强制运行模式不同。单模式程序不会打开用不到的相机/模型，避免抢 USB 设备。
+
+| 程序 | 源文件 | 行为 |
+|------|--------|------|
+| `ovsentry_mpc` | `src/ovsentry_mpc.cpp` | 比赛用：打符请求 → tracker lost 走全向 → 否则自瞄 |
+| `ovsentry_auto_aim` | `src/ovsentry_auto_aim.cpp` | 只跑自瞄 + MPC，lost 也不进全向 |
+| `ovsentry_buff` | `src/ovsentry_buff.cpp` | 只打符，不看 `/request_buff` |
+| `ovsentry_omni` | `src/ovsentry_omni.cpp` | 只跑三路 USB 全向，不要求主相机 lost |
+
+```bash
+./build/ovsentry_auto_aim configs/sentry.yaml
+./build/ovsentry_buff configs/sentry.yaml
+./build/ovsentry_omni configs/sentry.yaml
+```
 
 ---
 
@@ -298,7 +315,7 @@ chmod +x autostart.sh
    - `mpc_layout.xml` — 自瞄/MPC 曲线（`gimbal_yaw`、`mpc_yaw`、`ref_yaw` 等）
    - `buff_layout.xml` — 打符曲线（`buff_yaw`、`cmd_yaw`、`R_yaw` 等）
 
-代码中发送数据的字段见 `src/ovsentry_omni_mpc.cpp` 的 `data["..."]` 赋值段。新增曲线只需往 `nlohmann::json data` 里加字段，再 `plotter.plot(data)` 即可。
+代码中发送数据的字段见 `src/ovsentry/app.cpp` 的 `publish_telemetry()`。新增曲线只需往 `nlohmann::json data` 里加字段，再 `plotter.plot(data)` 即可。
 
 ---
 
@@ -306,7 +323,11 @@ chmod +x autostart.sh
 
 ```
 origin_vision_sentry
-├── src/ovsentry_omni_mpc.cpp   # 哨兵主程序（常规自瞄+打前哨站+全向感知+打符）
+├── src/ovsentry_mpc.cpp        # 比赛主程序（自动切换自瞄/全向/打符）
+├── src/ovsentry_auto_aim.cpp   # 只跑自瞄
+├── src/ovsentry_buff.cpp       # 只打符
+├── src/ovsentry_omni.cpp       # 只跑全向感知
+├── src/ovsentry/               # 共用实现（配置、App 主循环、叠加层）
 ├── configs/
 │   ├── sentry.yaml             # 哨兵主配置
 │   ├── calibration.yaml        # 标定配置
@@ -333,9 +354,11 @@ origin_vision_sentry
 
 ## 10. 模式切换说明
 
-主程序通过 ROS2 话题接收外部指令切换模式：
+比赛主程序 `ovsentry_mpc` 通过 ROS2 话题接收外部指令切换模式：
 
 - `/request_buff`（`std_msgs/Bool`）：`true` 时进入打符模式，`false` 退出
 - `/request_auto_aim_ignore`（`rm_interfaces/RequestAutoAimIgnore`）：忽略指定装甲 ID，用于导航追击时过滤目标
 
 无外部打符请求时，主相机 tracker 处于 `tracking`/`detecting` 走自瞄（根据目标类型自动区分常规装甲板与前哨站分支），进入 `lost` 走全向感知。打符由 `/request_buff` 请求抢占最高优先级。
+
+单模式程序 `ovsentry_auto_aim` / `ovsentry_buff` / `ovsentry_omni` 会忽略上述自动切换，始终停留在对应功能。

@@ -45,6 +45,8 @@ class ROS2Gimbal;
 namespace ovsentry
 {
 
+int run_ovsentry_app(int argc, char ** argv, AppMode mode);
+
 class OVSentryOmniMpc
 {
 public:
@@ -53,6 +55,8 @@ public:
   int run();
 
 private:
+  void init_mode_modules();
+  void update_mode_flags();
   bool read_main_frame();
   void detect_and_track();
   void reset_frame_outputs();
@@ -63,6 +67,7 @@ private:
   void publish_telemetry();
   bool render_display();
   void shutdown();
+  const char * window_title() const;
 
   OmniCandidateFrame read_omni_frame(
     io::USBCamera & camera, cv::Mat & img, std::chrono::steady_clock::time_point & ts,
@@ -80,23 +85,23 @@ private:
   ArmorIgnoreSubscriber armor_ignore_subscriber_;
   BuffRequestSubscriber buff_request_subscriber_;
   std::unique_ptr<io::Camera> auto_aim_camera_;
-  auto_aim::YOLO yolo_auto_;
+  std::unique_ptr<auto_aim::YOLO> yolo_auto_;
   auto_aim::Solver solver_;
   auto_aim::Tracker tracker_;
   auto_aim::Aimer aimer_;
   auto_aim::Shooter shooter_;
   auto_aim::Planner planner_;
   omniperception::Decider decider_;
-  auto_buff::Buff_Detector buff_detector_;
-  auto_buff::Solver buff_solver_;
+  std::unique_ptr<auto_buff::Buff_Detector> buff_detector_;
+  std::unique_ptr<auto_buff::Solver> buff_solver_;
   auto_buff::SmallTarget buff_small_target_;
-  auto_buff::Aimer buff_aimer_;
+  std::unique_ptr<auto_buff::Aimer> buff_aimer_;
   std::unique_ptr<auto_aim::YOLO> yolo_omni_left_;
   std::unique_ptr<auto_aim::YOLO> yolo_omni_right_;
   std::unique_ptr<auto_aim::YOLO> yolo_omni_back_;
-  io::USBCamera cam_left_;
-  io::USBCamera cam_right_;
-  io::USBCamera cam_back_;
+  std::unique_ptr<io::USBCamera> cam_left_;
+  std::unique_ptr<io::USBCamera> cam_right_;
+  std::unique_ptr<io::USBCamera> cam_back_;
 
   cv::Mat main_img_, left_img_, right_img_, back_img_;
   std::chrono::steady_clock::time_point main_timestamp_, ts_left_, ts_right_, ts_back_;

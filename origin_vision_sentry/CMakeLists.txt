@@ -38,7 +38,16 @@ add_subdirectory(tasks/auto_buff)
 add_subdirectory(tasks/omniperception)
 
 ####################src###################
-# 哨兵主程序：自瞄 + 全向感知 + 打符，入口为 ovsentry_omni_mpc.cpp
+# 哨兵程序：共用 ovsentry 实现，四个入口分别对应自动切换 / 自瞄 / 打符 / 全向
+
+set(OVSENTRY_COMMON
+    src/ovsentry/config.cpp
+    src/ovsentry/subscribers.cpp
+    src/ovsentry/auto_aim_helpers.cpp
+    src/ovsentry/overlay.cpp
+    src/ovsentry/app.cpp
+)
+set(OVSENTRY_LIBS ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff omniperception tools io io_ros2_gimbal fastcdr)
 
 ##################calibration################
 add_executable(capture calibration/capture.cpp)
@@ -139,19 +148,19 @@ else()
 endif()
 
 if(TARGET io_ros2_gimbal)
-    add_executable(ovsentry_omni_mpc
-        src/ovsentry_omni_mpc.cpp
-        src/ovsentry/config.cpp
-        src/ovsentry/subscribers.cpp
-        src/ovsentry/auto_aim_helpers.cpp
-        src/ovsentry/overlay.cpp
-        src/ovsentry/app.cpp
-    )
-    target_link_libraries(ovsentry_omni_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff omniperception tools io io_ros2_gimbal fastcdr)
+    add_executable(ovsentry_mpc src/ovsentry_mpc.cpp ${OVSENTRY_COMMON})
+    add_executable(ovsentry_auto_aim src/ovsentry_auto_aim.cpp ${OVSENTRY_COMMON})
+    add_executable(ovsentry_buff src/ovsentry_buff.cpp ${OVSENTRY_COMMON})
+    add_executable(ovsentry_omni src/ovsentry_omni.cpp ${OVSENTRY_COMMON})
+
+    target_link_libraries(ovsentry_mpc ${OVSENTRY_LIBS})
+    target_link_libraries(ovsentry_auto_aim ${OVSENTRY_LIBS})
+    target_link_libraries(ovsentry_buff ${OVSENTRY_LIBS})
+    target_link_libraries(ovsentry_omni ${OVSENTRY_LIBS})
 else()
     if(SENTRY_SPECIAL_MODE STREQUAL "OFF")
-        message(STATUS "SENTRY_SPECIAL_MODE=OFF, skipping ovsentry_omni_mpc target.")
+        message(STATUS "SENTRY_SPECIAL_MODE=OFF, skipping ovsentry_* targets.")
     else()
-        message(STATUS "io_ros2_gimbal target unavailable under SENTRY_SPECIAL_MODE=${SENTRY_SPECIAL_MODE}, skipping ovsentry_omni_mpc target.")
+        message(STATUS "io_ros2_gimbal target unavailable under SENTRY_SPECIAL_MODE=${SENTRY_SPECIAL_MODE}, skipping ovsentry_* targets.")
     endif()
 endif()

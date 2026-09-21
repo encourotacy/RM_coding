@@ -10,8 +10,41 @@
 namespace ovsentry
 {
 
+enum class AppMode { AutoSwitch, AutoAim, Buff, Omni };
+
+inline const char * app_mode_name(AppMode mode)
+{
+  switch (mode) {
+    case AppMode::AutoAim:
+      return "AutoAim";
+    case AppMode::Buff:
+      return "Buff";
+    case AppMode::Omni:
+      return "Omni";
+    case AppMode::AutoSwitch:
+      return "MPC";
+  }
+  return "MPC";
+}
+
+inline bool uses_auto_aim_detect(AppMode mode)
+{
+  return mode == AppMode::AutoSwitch || mode == AppMode::AutoAim;
+}
+
+inline bool uses_buff(AppMode mode)
+{
+  return mode == AppMode::AutoSwitch || mode == AppMode::Buff;
+}
+
+inline bool uses_omni(AppMode mode)
+{
+  return mode == AppMode::AutoSwitch || mode == AppMode::Omni;
+}
+
 struct RuntimeConfig
 {
+  AppMode mode = AppMode::AutoSwitch;
   std::string config_path;
   std::string auto_aim_device;
   std::string omni_device;

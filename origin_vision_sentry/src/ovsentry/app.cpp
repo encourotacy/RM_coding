@@ -30,6 +30,20 @@ io::GimbalState make_buff_gimbal_state(const io::ROS2GimbalState & state)
 
 }  // namespace
 
+int run_ovsentry_app(int argc, char ** argv, AppMode mode)
+{
+  auto config = parse_runtime_config(argc, argv);
+  if (!config) return 0;
+
+  config->mode = mode;
+  tools::logger()->info(
+    "[OVSentry{}] inference devices: auto_aim={} omni={}", app_mode_name(mode),
+    config->auto_aim_device, config->omni_device);
+
+  OVSentryOmniMpc app(std::move(*config));
+  return app.run();
+}
+
 OVSentryOmniMpc::~OVSentryOmniMpc() = default;
 
 OVSentryOmniMpc::OVSentryOmniMpc(RuntimeConfig cfg)
@@ -38,26 +52,75 @@ OVSentryOmniMpc::OVSentryOmniMpc(RuntimeConfig cfg)
   gimbal_(std::make_unique<io::ROS2Gimbal>(cfg_.config_path)),
   armor_ignore_subscriber_(cfg_.auto_aim_ignore_topic, cfg_.auto_aim_ignore_msg_type),
   auto_aim_camera_(std::make_unique<io::Camera>(cfg_.config_path)),
-  yolo_auto_(cfg_.config_path, yolo_debug_, "auto_aim_device"),
   solver_(cfg_.config_path),
   tracker_(cfg_.config_path, solver_),
   aimer_(cfg_.config_path),
   shooter_(cfg_.config_path),
   planner_(cfg_.config_path),
-  decider_(cfg_.config_path),
-  buff_detector_(cfg_.config_path),
-  buff_solver_(cfg_.config_path),
-  buff_aimer_(cfg_.config_path),
-  yolo_omni_left_(std::make_unique<auto_aim::YOLO>(cfg_.config_path, yolo_debug_, "omni_device")),
-  yolo_omni_right_(std::make_unique<auto_aim::YOLO>(cfg_.config_path, yolo_debug_, "omni_device")),
-  yolo_omni_back_(std::make_unique<auto_aim::YOLO>(cfg_.config_path, yolo_debug_, "omni_device")),
-  cam_left_(cfg_.left_cam.dev_name, cfg_.config_path),
-  cam_right_(cfg_.right_cam.dev_name, cfg_.config_path),
-  cam_back_(cfg_.back_cam.dev_name, cfg_.config_path)
+  decider_(cfg_.config_path)
 {
-  cam_left_.device_name = cfg_.left_cam.spec.label;
-  cam_right_.device_name = cfg_.right_cam.spec.label;
-  cam_back_.device_name = cfg_.back_cam.spec.label;
+  init_mode_modules();
+}
+
+void OVSentryOmniMpc::init_mode_modules()
+{
+  if (uses_auto_aim_detect(cfg_.mode)) {
+    yolo_auto_ = std::make_unique<auto_aim::YOLO>(cfg_.config_path, yolo_debug_, "auto_aim_device");
+  }
+  if (uses_buff(cfg_.mode)) {
+    buff_detector_ = std::make_unique<auto_buff::Buff_Detector>(cfg_.config_path);
+    buff_solver_ = std::make_unique<auto_buff::Solver>(cfg_.config_path);
+    buff_aimer_ = std::make_unique<auto_buff::Aimer>(cfg_.config_path);
+  }
+  if (uses_omni(cfg_.mode)) {
+    yolo_omni_left_ = std::make_unique<auto_aim::YOLO>(cfg_.config_path, yolo_debug_, "omni_device");
+    yolo_omni_right_ = std::make_unique<auto_aim::YOLO>(cfg_.config_path, yolo_debug_, "omni_device");
+    yolo_omni_back_ = std::make_unique<auto_aim::YOLO>(cfg_.config_path, yolo_debug_, "omni_device");
+    cam_left_ = std::make_unique<io::USBCamera>(cfg_.left_cam.dev_name, cfg_.config_path);
+    cam_right_ = std::make_unique<io::USBCamera>(cfg_.right_cam.dev_name, cfg_.config_path);
+    cam_back_ = std::make_unique<io::USBCamera>(cfg_.back_cam.dev_name, cfg_.config_path);
+    cam_left_->device_name = cfg_.left_cam.spec.label;
+    cam_right_->device_name = cfg_.right_cam.spec.label;
+    cam_back_->device_name = cfg_.back_cam.spec.label;
+  }
+}
+
+const char * OVSentryOmniMpc::window_title() const
+{
+  switch (cfg_.mode) {
+    case AppMode::AutoAim:
+      return "ovsentry_auto_aim";
+    case AppMode::Buff:
+      return "ovsentry_buff";
+    case AppMode::Omni:
+      return "ovsentry_omni";
+    case AppMode::AutoSwitch:
+      return "ovsentry_mpc";
+  }
+  return "ovsentry_mpc";
+}
+
+void OVSentryOmniMpc::update_mode_flags()
+{
+  switch (cfg_.mode) {
+    case AppMode::Buff:
+      small_buff_mode_ = true;
+      omni_mode_ = false;
+      break;
+    case AppMode::Omni:
+      small_buff_mode_ = false;
+      omni_mode_ = true;
+      break;
+    case AppMode::AutoAim:
+      small_buff_mode_ = false;
+      omni_mode_ = false;
+      break;
+    case AppMode::AutoSwitch:
+    default:
+      small_buff_mode_ = buff_request_subscriber_.requested();
+      omni_mode_ = false;
+      break;
+  }
 }
 
 int OVSentryOmniMpc::run()
@@ -69,11 +132,13 @@ int OVSentryOmniMpc::run()
     q_ = gimbal_->imu_at_image(main_timestamp_);
     solver_.set_R_gimbal2world(q_);
     gimbal_state_ = gimbal_->state();
-    small_buff_mode_ = buff_request_subscriber_.requested();
     ypr_ = tools::eulers(solver_.R_gimbal2world(), 2, 1, 0);
 
+    update_mode_flags();
     detect_and_track();
-    omni_mode_ = !small_buff_mode_ && tracker_state_ == "lost";
+    if (cfg_.mode == AppMode::AutoSwitch) {
+      omni_mode_ = !small_buff_mode_ && tracker_state_ == "lost";
+    }
 
     reset_frame_outputs();
     now_ = std::chrono::steady_clock::now();
@@ -102,7 +167,8 @@ bool OVSentryOmniMpc::read_main_frame()
     auto_aim_camera_->read(main_img_, main_timestamp_);
     if (main_img_.empty()) return false;
   } catch (const std::exception & e) {
-    tools::logger()->error("[OVSentryOmniMPC] main camera read failed: {}", e.what());
+    tools::logger()->error(
+      "[OVSentry{}] main camera read failed: {}", app_mode_name(cfg_.mode), e.what());
     return false;
   }
   return true;
@@ -115,8 +181,8 @@ void OVSentryOmniMpc::detect_and_track()
   armors_.clear();
   targets_.clear();
   tracker_state_ = small_buff_mode_ ? "small_buff" : "idle";
-  if (!small_buff_mode_) {
-    armors_ = yolo_auto_.detect(main_img_, frame_count_);
+  if (!small_buff_mode_ && yolo_auto_) {
+    armors_ = yolo_auto_->detect(main_img_, frame_count_);
     decider_.armor_filter(armors_);
     decider_.set_priority(armors_);
     apply_armor_target_mask(armors_, armor_target_mask_);
@@ -192,19 +258,23 @@ void OVSentryOmniMpc::run_small_buff()
   right_img_.release();
   back_img_.release();
   clear_omni_redirect_state();
+  if (!buff_detector_ || !buff_solver_ || !buff_aimer_) {
+    gimbal_->send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0);
+    return;
+  }
 
-  buff_solver_.set_R_gimbal2world(q_);
+  buff_solver_->set_R_gimbal2world(q_);
   const auto t_buff0 = std::chrono::steady_clock::now();
-  buff_power_rune_ = buff_detector_.detect(main_img_);
+  buff_power_rune_ = buff_detector_->detect(main_img_);
   const auto t_buff1 = std::chrono::steady_clock::now();
   buff_detect_ms_ = tools::delta_time(t_buff1, t_buff0) * 1e3;
-  buff_solver_.solve(buff_power_rune_);
+  buff_solver_->solve(buff_power_rune_);
   buff_small_target_.get_target(buff_power_rune_, main_timestamp_);
   buff_target_ready_ = !buff_small_target_.is_unsolve();
 
   auto buff_target_copy = buff_small_target_;
-  buff_plan_ =
-    buff_aimer_.mpc_aim(buff_target_copy, main_timestamp_, make_buff_gimbal_state(gimbal_state_), true);
+  buff_plan_ = buff_aimer_->mpc_aim(
+    buff_target_copy, main_timestamp_, make_buff_gimbal_state(gimbal_state_), true);
 
   command_.control = buff_plan_.control;
   command_.shoot = buff_plan_.fire;
@@ -267,10 +337,15 @@ void OVSentryOmniMpc::finalize_omni_frame(
 void OVSentryOmniMpc::run_omni()
 {
   buff_hold_command_.reset();
+  if (!cam_left_ || !cam_right_ || !cam_back_ || !yolo_omni_left_ || !yolo_omni_right_ ||
+      !yolo_omni_back_) {
+    gimbal_->send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0);
+    return;
+  }
 
-  auto left_frame = read_omni_frame(cam_left_, left_img_, ts_left_, cfg_.left_cam);
-  auto right_frame = read_omni_frame(cam_right_, right_img_, ts_right_, cfg_.right_cam);
-  auto back_frame = read_omni_frame(cam_back_, back_img_, ts_back_, cfg_.back_cam);
+  auto left_frame = read_omni_frame(*cam_left_, left_img_, ts_left_, cfg_.left_cam);
+  auto right_frame = read_omni_frame(*cam_right_, right_img_, ts_right_, cfg_.right_cam);
+  auto back_frame = read_omni_frame(*cam_back_, back_img_, ts_back_, cfg_.back_cam);
 
   auto t_omni0 = std::chrono::steady_clock::now();
   if (left_frame.has_base_big_yaw && !left_img_.empty()) {
@@ -387,7 +462,8 @@ void OVSentryOmniMpc::run_omni()
         active_omni_timeout_running_ &&
         (now_ - active_omni_timeout_started_at_) > cfg_.omni_command_timeout) {
         tools::logger()->warn(
-          "[OVSentryOmniMPC] omni command timed out after {:.0f}ms without reaching target yaw",
+          "[OVSentry{}] omni command timed out after {:.0f}ms without reaching target yaw",
+          app_mode_name(cfg_.mode),
           omni_cmd_elapsed_ms_);
         command_ = io::Command{false, false, 0.0, 0.0};
         omni_target_abs_yaw_deg_.reset();
@@ -479,6 +555,7 @@ void OVSentryOmniMpc::run_auto_aim_mpc()
 void OVSentryOmniMpc::publish_telemetry()
 {
   nlohmann::json data;
+  data["app_mode"] = app_mode_name(cfg_.mode);
   data["mode"] = small_buff_mode_ ? 2 : (omni_mode_ ? 1 : 0);
   data["gimbal_mode"] = io::MODES[static_cast<int>(gimbal_->mode())];
   data["armor_num"] = armors_.size();
@@ -578,8 +655,9 @@ void OVSentryOmniMpc::publish_telemetry()
 
 bool OVSentryOmniMpc::render_display()
 {
-  if (small_buff_mode_) {
-    draw_small_buff_overlay(main_img_, buff_power_rune_, buff_small_target_, buff_solver_, buff_plan_);
+  if (small_buff_mode_ && buff_solver_) {
+    draw_small_buff_overlay(
+      main_img_, buff_power_rune_, buff_small_target_, *buff_solver_, buff_plan_);
   } else {
     draw_auto_aim_overlay(main_img_, targets_, aimer_, solver_);
     tools::draw_text(
@@ -620,6 +698,12 @@ bool OVSentryOmniMpc::render_display()
       {10, 180}, {180, 255, 180}, 0.8, 2);
   }
 
+  const char * title = window_title();
+  if (!uses_omni(cfg_.mode)) {
+    cv::imshow(title, resize_for_view(main_img_));
+    return cv::waitKey(1) != 'q';
+  }
+
   cv::Mat left_show =
     left_img_.empty() ? cv::Mat::zeros(main_img_.size(), main_img_.type()) : left_img_.clone();
   cv::Mat right_show =
@@ -646,7 +730,7 @@ bool OVSentryOmniMpc::render_display()
   cv::hconcat(main_small, left_small, top_row);
   cv::hconcat(right_small, back_small, bottom_row);
   cv::vconcat(top_row, bottom_row, canvas);
-  cv::imshow("ovsentry_omni_mpc", canvas);
+  cv::imshow(title, canvas);
   return cv::waitKey(1) != 'q';
 }
 

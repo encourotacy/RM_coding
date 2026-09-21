@@ -6,4 +6,4 @@ screen \
     -Logfile logs/$(date "+%Y-%m-%d_%H-%M-%S").screenlog \
     -d \
     -m \
-    bash -c "./build/ovsentry_omni_mpc configs/sentry.yaml --no-display"
+    bash -c "./build/ovsentry_mpc configs/sentry.yaml --no-display"
