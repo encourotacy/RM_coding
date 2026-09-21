@@ -12,6 +12,7 @@
 
 #include "io/cboard.hpp"
 #include "io/command.hpp"
+#include "io/ros2/ros2_gimbal_state.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tools/thread_safe_queue.hpp"
 
@@ -21,16 +22,6 @@
 
 namespace io
 {
-struct ROS2GimbalState
-{
-  double yaw;
-  double yaw_vel;
-  double pitch;
-  double pitch_vel;
-  double bullet_speed;
-  double big_yaw;
-};
-
 class ROS2Gimbal
 {
 public:

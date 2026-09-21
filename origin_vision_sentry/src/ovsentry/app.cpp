@@ -9,6 +9,7 @@
 
 #include "auto_aim_helpers.hpp"
 #include "io/gimbal/gimbal.hpp"
+#include "io/ros2/ros2_gimbal.hpp"
 #include "overlay.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
@@ -29,6 +30,7 @@ io::GimbalState make_buff_gimbal_state(const io::ROS2GimbalState & state)
 
 }  // namespace
 
+OVSentryOmniMpc::~OVSentryOmniMpc() = default;
 
 OVSentryOmniMpc::OVSentryOmniMpc(RuntimeConfig cfg)
 : cfg_(std::move(cfg)),

@@ -14,7 +14,7 @@
 #include "config.hpp"
 #include "io/camera.hpp"
 #include "io/command.hpp"
-#include "io/ros2/ros2_gimbal.hpp"
+#include "io/ros2/ros2_gimbal_state.hpp"
 #include "io/usbcamera/usbcamera.hpp"
 #include "subscribers.hpp"
 #include "tasks/auto_aim/aimer.hpp"
@@ -37,6 +37,11 @@
 #include "tools/recorder.hpp"
 #include "types.hpp"
 
+namespace io
+{
+class ROS2Gimbal;
+}
+
 namespace ovsentry
 {
 
@@ -44,6 +49,7 @@ class OVSentryOmniMpc
 {
 public:
   explicit OVSentryOmniMpc(RuntimeConfig cfg);
+  ~OVSentryOmniMpc();
   int run();
 
 private:

@@ -1,0 +1,31 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    - -std=c++17
+    - -Wno-error=deprecated-declarations
+    - -I.
+    - -Isrc
+    - -I/usr/include/eigen3
+    - -I/usr/include/opencv4
+    - -isystem/opt/intel/openvino_2024.6.0/runtime/include
+    - -I/opt/ros/humble/include
+    - -I/opt/ros/humble/include/rclcpp
+    - -I/opt/ros/humble/include/rcl
+    - -I/opt/ros/humble/include/rcutils
+    - -I/opt/ros/humble/include/rmw
+    - -I/opt/ros/humble/include/rcl_interfaces
+    - -I/opt/ros/humble/include/rcl_yaml_param_parser
+    - -I/opt/ros/humble/include/rcpputils
+    - -I/opt/ros/humble/include/rosidl_runtime_c
+    - -I/opt/ros/humble/include/rosidl_runtime_cpp
+    - -I/opt/ros/humble/include/rosidl_typesupport_interface
+    - -I/opt/ros/humble/include/rosidl_typesupport_introspection_c
+    - -I/opt/ros/humble/include/rosidl_typesupport_introspection_cpp
+    - -I/opt/ros/humble/include/builtin_interfaces
+    - -I/opt/ros/humble/include/std_msgs
+    - -I/opt/ros/humble/include/libstatistics_collector
+    - -I/opt/ros/humble/include/statistics_msgs
+    - -I/opt/ros/humble/include/tracetools
+
+Index:
+  Background: Build

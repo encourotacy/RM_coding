@@ -1,5 +1,5 @@
-#include "src/ovsentry/app.hpp"
-#include "src/ovsentry/config.hpp"
+#include "ovsentry/app.hpp"
+#include "ovsentry/config.hpp"
 #include "tools/logger.hpp"
 
 int main(int argc, char * argv[])
