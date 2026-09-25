@@ -1,28 +1,24 @@
-#include <fastcdr/Cdr.h>
-#include <fastcdr/FastBuffer.h>
-
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <list>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <opencv2/opencv.hpp>
-#include <std_msgs/msg/bool.hpp>
 
 #include "io/camera.hpp"
+#include "io/ros2/sentry_request.hpp"
+#include "io/ros2/gimbal_convert.hpp"
 #include "io/ros2/ros2_gimbal.hpp"
 #include "io/usbcamera/usbcamera.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
+#include "tasks/auto_aim/sentry_command.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
@@ -39,375 +35,6 @@
 #include "tools/math_tools.hpp"
 #include "tools/yaml.hpp"
 #include "tools/recorder.hpp"
-
-namespace
-{
-struct OmniCamConfig
-{
-  omniperception::CameraSpec spec;
-  std::string dev_name;
-};
-
-struct OmniInferenceResult
-{
-  OmniCamConfig cam;
-  std::list<auto_aim::Armor> armors;
-  std::optional<auto_aim::Armor> top_armor;
-  double delta_yaw_deg = 0.0;
-};
-
-struct OmniCandidateFrame
-{
-  OmniInferenceResult result;
-  std::chrono::steady_clock::time_point timestamp{};
-  double base_big_yaw_rad = 0.0;
-  bool has_base_big_yaw = false;
-  std::optional<omniperception::OmniCandidate> candidate;
-};
-
-io::GimbalState make_buff_gimbal_state(const io::ROS2GimbalState & state)
-{
-  return {
-    static_cast<float>(state.yaw), static_cast<float>(state.yaw_vel),
-    static_cast<float>(state.pitch), static_cast<float>(state.pitch_vel),
-    static_cast<float>(state.bullet_speed), 0};
-}
-
-std::string normalize_dev_name(const std::string & dev)
-{
-  if (dev.rfind("/dev/", 0) == 0) return dev.substr(5);
-  return dev;
-}
-
-bool better_armor(const auto_aim::Armor & lhs, const auto_aim::Armor & rhs)
-{
-  if (lhs.priority != rhs.priority) return lhs.priority < rhs.priority;
-  return lhs.confidence > rhs.confidence;
-}
-
-std::optional<auto_aim::Armor> pick_top_armor(const std::list<auto_aim::Armor> & armors)
-{
-  if (armors.empty()) return std::nullopt;
-  auto best_it = armors.begin();
-  for (auto it = std::next(armors.begin()); it != armors.end(); ++it) {
-    if (better_armor(*it, *best_it)) best_it = it;
-  }
-  return *best_it;
-}
-
-struct ArmorTargetMask
-{
-  bool enabled = false;
-  std::vector<uint8_t> ignored_ids;
-};
-
-uint8_t armor_name_to_nav_id(auto_aim::ArmorName name);
-
-std::vector<uint8_t> deserialize_ignore_ids(const rclcpp::SerializedMessage & serialized_message)
-{
-  const auto & raw = serialized_message.get_rcl_serialized_message();
-  eprosima::fastcdr::FastBuffer buffer(reinterpret_cast<char *>(raw.buffer), raw.buffer_length);
-  eprosima::fastcdr::Cdr cdr(buffer);
-  cdr.read_encapsulation();
-
-  uint32_t count = 0;
-  cdr >> count;
-
-  std::vector<uint8_t> ids;
-  ids.reserve(count);
-  for (uint32_t i = 0; i < count; ++i) {
-    uint8_t id = 0;
-    cdr >> id;
-    ids.push_back(id);
-  }
-
-  std::sort(ids.begin(), ids.end());
-  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-  return ids;
-}
-
-class ArmorIgnoreSubscriber
-{
-public:
-  ArmorIgnoreSubscriber(
-    const std::string & topic = "/request_auto_aim_ignore",
-    const std::string & msg_type = "rm_interfaces/msg/RequestAutoAimIgnore")
-  {
-    if (!rclcpp::ok()) {
-      rclcpp::init(0, nullptr);
-      self_initialized_ = true;
-    }
-
-    node_ = std::make_shared<rclcpp::Node>("auto_aim_ignore_subscriber");
-    try {
-      subscription_ = node_->create_generic_subscription(
-        topic, msg_type, rclcpp::SensorDataQoS(),
-        [this](const std::shared_ptr<rclcpp::SerializedMessage> message) {
-          this->callback(message);
-        });
-
-      executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
-      executor_->add_node(node_);
-      spin_thread_ = std::thread([this]() { executor_->spin(); });
-      tools::logger()->info("[AutoAimIgnore] Subscribed '{}' as '{}'.", topic, msg_type);
-    } catch (const std::exception & e) {
-      tools::logger()->warn("[AutoAimIgnore] Failed to subscribe '{}': {}", topic, e.what());
-    }
-  }
-
-  ~ArmorIgnoreSubscriber()
-  {
-    if (executor_) executor_->cancel();
-    if (spin_thread_.joinable()) spin_thread_.join();
-    if (executor_ && node_) executor_->remove_node(node_);
-    if (self_initialized_ && rclcpp::ok()) rclcpp::shutdown();
-  }
-
-  ArmorTargetMask mask() const
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return mask_;
-  }
-
-private:
-  void callback(const std::shared_ptr<rclcpp::SerializedMessage> & message)
-  {
-    try {
-      auto ids = deserialize_ignore_ids(*message);
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        mask_.enabled = !ids.empty();
-        mask_.ignored_ids = ids;
-      }
-      for (const auto id : ids) {
-        tools::logger()->info("[AutoAimIgnore] ignore armor id: {}", static_cast<int>(id));
-      }
-    } catch (const std::exception & e) {
-      tools::logger()->warn("[AutoAimIgnore] Failed to parse ignore ids: {}", e.what());
-    }
-  }
-
-  mutable std::mutex mutex_;
-  ArmorTargetMask mask_;
-  bool self_initialized_ = false;
-  std::shared_ptr<rclcpp::Node> node_;
-  std::shared_ptr<rclcpp::GenericSubscription> subscription_;
-  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
-  std::thread spin_thread_;
-};
-
-class BuffRequestSubscriber
-{
-public:
-  explicit BuffRequestSubscriber(const std::string & topic = "/request_buff")
-  {
-    if (!rclcpp::ok()) {
-      rclcpp::init(0, nullptr);
-      self_initialized_ = true;
-    }
-
-    node_ = std::make_shared<rclcpp::Node>("buff_request_subscriber");
-    subscription_ = node_->create_subscription<std_msgs::msg::Bool>(
-      topic, 10, [this](const std_msgs::msg::Bool::SharedPtr message) {
-        request_buff_.store(message->data);
-        tools::logger()->info(
-          "[BuffRequest] request_buff={}", message->data ? "true" : "false");
-      });
-
-    executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
-    executor_->add_node(node_);
-    spin_thread_ = std::thread([this]() { executor_->spin(); });
-    tools::logger()->info("[BuffRequest] Subscribed '{}'.", topic);
-  }
-
-  ~BuffRequestSubscriber()
-  {
-    if (executor_) executor_->cancel();
-    if (spin_thread_.joinable()) spin_thread_.join();
-    if (executor_ && node_) executor_->remove_node(node_);
-    if (self_initialized_ && rclcpp::ok()) rclcpp::shutdown();
-  }
-
-  bool requested() const { return request_buff_.load(); }
-
-private:
-  std::atomic_bool request_buff_{false};
-  bool self_initialized_ = false;
-  std::shared_ptr<rclcpp::Node> node_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr subscription_;
-  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
-  std::thread spin_thread_;
-};
-
-ArmorTargetMask read_nav_armor_target_mask(const ArmorIgnoreSubscriber & subscriber)
-{
-  return subscriber.mask();
-}
-
-ArmorTargetMask read_nav_armor_target_mask()
-{
-  ArmorTargetMask mask;
-  mask.enabled = true;
-  mask.ignored_ids = {};
-  return mask;
-}
-
-void apply_armor_target_mask(std::list<auto_aim::Armor> & armors, const ArmorTargetMask & mask)
-{
-  if (!mask.enabled) return;
-  if (mask.ignored_ids.empty()) return;
-
-  armors.remove_if([&](const auto_aim::Armor & armor) {
-    const auto id = armor_name_to_nav_id(armor.name);
-    return id != 0 && std::find(mask.ignored_ids.begin(), mask.ignored_ids.end(), id) !=
-                      mask.ignored_ids.end();
-  });
-}
-
-std::pair<double, double> calc_delta_angle_deg(
-  const auto_aim::Armor & armor, const OmniCamConfig & cam)
-{
-  const double delta_yaw =
-    cam.spec.center_yaw_deg + (0.5 - armor.center_norm.x) * cam.spec.fov_h_deg;
-  const double delta_pitch = (armor.center_norm.y - 0.5) * cam.spec.fov_v_deg;
-  return {delta_yaw, delta_pitch};
-}
-
-double angular_distance_deg(double lhs_rad, double rhs_rad)
-{
-  return std::abs(tools::limit_rad(lhs_rad - rhs_rad)) * 57.3;
-}
-
-uint8_t armor_name_to_nav_id(auto_aim::ArmorName name)
-{
-  switch (name) {
-    case auto_aim::ArmorName::one:
-      return 1;
-    case auto_aim::ArmorName::two:
-      return 2;
-    case auto_aim::ArmorName::three:
-      return 3;
-    case auto_aim::ArmorName::four:
-      return 4;
-    case auto_aim::ArmorName::five:
-      return 5;
-    case auto_aim::ArmorName::sentry:
-      return 6;
-    case auto_aim::ArmorName::outpost:
-      return 7;
-    case auto_aim::ArmorName::base:
-      return 8;
-    default:
-      return 0;
-  }
-}
-
-double nearest_continuous_yaw_rad(double wrapped_yaw_rad, double reference_yaw_rad)
-{
-  return reference_yaw_rad + tools::limit_rad(wrapped_yaw_rad - reference_yaw_rad);
-}
-
-double target_center_big_yaw_rad(const auto_aim::Target & target, double current_big_yaw_rad)
-{
-  const auto & ekf_x = target.ekf_x();
-  const double wrapped_center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
-  return nearest_continuous_yaw_rad(wrapped_center_yaw, current_big_yaw_rad);
-}
-
-bool is_unlocked_outpost_target(const auto_aim::Target & target)
-{
-  return target.name == auto_aim::ArmorName::outpost && !target.outpost_layer_locked();
-}
-
-void apply_sentry_tracking_yaws(
-  io::Command & command, const auto_aim::Target & target, double current_big_yaw_rad)
-{
-  if (!command.control) return;
-  command.small_yaw = command.yaw;
-  command.big_yaw =
-    is_unlocked_outpost_target(target) ? current_big_yaw_rad
-                                      : target_center_big_yaw_rad(target, current_big_yaw_rad);
-  command.has_target_yaw = true;
-}
-
-void apply_abs_yaw_target(io::Command & command, double abs_yaw_rad)
-{
-  command.control = true;
-  command.yaw = tools::limit_rad(abs_yaw_rad);
-  command.big_yaw = abs_yaw_rad;
-  command.small_yaw = command.yaw;
-  command.has_target_yaw = true;
-}
-
-std::optional<omniperception::OmniCandidate> build_omni_candidate(
-  const OmniInferenceResult & result, std::chrono::steady_clock::time_point timestamp,
-  double base_big_yaw_rad)
-{
-  if (!result.top_armor.has_value()) return std::nullopt;
-
-  const auto & armor = result.top_armor.value();
-  omniperception::OmniCandidate candidate;
-  candidate.slot = result.cam.spec.slot;
-  candidate.armor_name = armor.name;
-  candidate.priority = armor.priority;
-  candidate.confidence = armor.confidence;
-  candidate.timestamp = timestamp;
-  candidate.base_big_yaw_rad = base_big_yaw_rad;
-  candidate.abs_yaw_rad = base_big_yaw_rad + result.delta_yaw_deg / 57.3;
-  apply_abs_yaw_target(candidate.command, candidate.abs_yaw_rad);
-  candidate.command.armor_id = armor_name_to_nav_id(armor.name);
-  candidate.command.pitch = 0.26;
-  return candidate;
-}
-
-omniperception::AcceptedOmniTarget make_accepted_omni_target(
-  const omniperception::OmniCandidate & candidate)
-{
-  omniperception::AcceptedOmniTarget accepted_target;
-  accepted_target.slot = candidate.slot;
-  accepted_target.armor_name = candidate.armor_name;
-  accepted_target.priority = candidate.priority;
-  accepted_target.confidence = candidate.confidence;
-  accepted_target.timestamp = candidate.timestamp;
-  accepted_target.base_big_yaw_rad = candidate.base_big_yaw_rad;
-  accepted_target.abs_yaw_rad = candidate.abs_yaw_rad;
-  accepted_target.command = candidate.command;
-  return accepted_target;
-}
-
-bool same_omni_target_continuation(
-  const omniperception::AcceptedOmniTarget & lhs, const omniperception::AcceptedOmniTarget & rhs,
-  double retarget_min_delta_deg)
-{
-  if (lhs.slot != rhs.slot) return false;
-  if (lhs.armor_name != rhs.armor_name) return false;
-  return angular_distance_deg(lhs.abs_yaw_rad, rhs.abs_yaw_rad) < retarget_min_delta_deg;
-}
-
-double horizon_distance(const auto_aim::Target & target)
-{
-  const auto & x = target.ekf_x();
-  return std::sqrt(x[0] * x[0] + x[2] * x[2]);
-}
-
-void fill_nav_target_info(io::Command & command, const std::list<auto_aim::Target> & targets)
-{
-  command.armor_id = 0;
-  command.vx = 0.0;
-  command.vy = 0.0;
-  command.horizon_distance = 0.0;
-
-  if (!command.control || targets.empty()) return;
-
-  const auto & target = targets.front();
-  const auto x = target.ekf_x();
-  command.armor_id = armor_name_to_nav_id(target.name);
-  command.vx = x[1];
-  command.vy = x[3];
-  command.horizon_distance = horizon_distance(target);
-}
-
-}  // namespace
 
 const std::string keys =
   "{help h usage ? |                         | 输出命令行参数说明}"
@@ -439,9 +66,9 @@ int main(int argc, char * argv[])
   auto read_cam_path = [&](const std::string & cli_key, const std::string & yaml_key,
                            const std::string & fallback) {
       const auto cli_value = cli.get<std::string>(cli_key);
-      if (!cli_value.empty() && cli_value != "__yaml__") return normalize_dev_name(cli_value);
-      if (yaml[yaml_key]) return normalize_dev_name(yaml[yaml_key].as<std::string>());
-      return normalize_dev_name(fallback);
+      if (!cli_value.empty() && cli_value != "__yaml__") return io::normalize_dev_name(cli_value);
+      if (yaml[yaml_key]) return io::normalize_dev_name(yaml[yaml_key].as<std::string>());
+      return io::normalize_dev_name(fallback);
     };
   auto read_cli_or_yaml_double = [&](const std::string & cli_key, const std::string & yaml_key,
                                      double fallback) {
@@ -479,15 +106,15 @@ int main(int argc, char * argv[])
 
   const double omni_fov_h_deg = read_cli_or_yaml_double("fov_h", "omni_fov_h_deg", 120.0);
   const double omni_fov_v_deg = read_cli_or_yaml_double("fov_v", "omni_fov_v_deg", 67.0);
-  const OmniCamConfig left_cam_cfg{
+  const omniperception::OmniCamConfig left_cam_cfg{
     {omniperception::OmniCameraSlot::left, "left", read_cam_path("left", "omni_left_path", "video0"),
      read_cli_or_yaml_double("left_yaw", "omni_left_yaw_deg", 60.0), omni_fov_h_deg, omni_fov_v_deg},
     read_cam_path("left", "omni_left_path", "video0")};
-  const OmniCamConfig right_cam_cfg{
+  const omniperception::OmniCamConfig right_cam_cfg{
     {omniperception::OmniCameraSlot::right, "right", read_cam_path("right", "omni_right_path", "video2"),
      read_cli_or_yaml_double("right_yaw", "omni_right_yaw_deg", -60.0), omni_fov_h_deg, omni_fov_v_deg},
     read_cam_path("right", "omni_right_path", "video2")};
-  const OmniCamConfig back_cam_cfg{
+  const omniperception::OmniCamConfig back_cam_cfg{
     {omniperception::OmniCameraSlot::back, "back", read_cam_path("back", "omni_back_path", "video4"),
      read_cli_or_yaml_double("back_yaw", "omni_back_yaw_deg", 180.0), omni_fov_h_deg, omni_fov_v_deg},
     read_cam_path("back", "omni_back_path", "video4")};
@@ -500,8 +127,8 @@ int main(int argc, char * argv[])
   constexpr bool yolo_debug = false;
 
   auto gimbal = std::make_unique<io::ROS2Gimbal>(config_path);
-  ArmorIgnoreSubscriber armor_ignore_subscriber(auto_aim_ignore_topic, auto_aim_ignore_msg_type);
-  BuffRequestSubscriber buff_request_subscriber;
+  io::ArmorIgnoreSubscriber armor_ignore_subscriber(auto_aim_ignore_topic, auto_aim_ignore_msg_type);
+  io::BuffRequestSubscriber buff_request_subscriber;
   auto auto_aim_camera = std::make_unique<io::Camera>(config_path);
 
   auto_aim::YOLO yolo_auto(config_path, yolo_debug, "auto_aim_device");
@@ -560,7 +187,9 @@ int main(int argc, char * argv[])
     
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
-    const auto armor_target_mask = read_nav_armor_target_mask(armor_ignore_subscriber);
+    const auto armor_ignore_list = armor_ignore_subscriber.ignored();
+    const auto_aim::ArmorTargetMask armor_target_mask{
+      armor_ignore_list.enabled, armor_ignore_list.ignored_ids};
     std::list<auto_aim::Armor> armors;
     std::list<auto_aim::Target> targets;
     std::string tracker_state = small_buff_mode ? "small_buff" : "idle";
@@ -568,7 +197,7 @@ int main(int argc, char * argv[])
       armors = yolo_auto.detect(main_img, frame_count);
       decider.armor_filter(armors);
       decider.set_priority(armors);
-      apply_armor_target_mask(armors, armor_target_mask);
+      auto_aim::apply_armor_target_mask(armors, armor_target_mask);
       targets = tracker.track(armors, main_timestamp);
       tracker_state = tracker.state();
     }
@@ -622,13 +251,13 @@ int main(int argc, char * argv[])
 
       auto buff_target_copy = buff_small_target;
       buff_plan =
-        buff_aimer.mpc_aim(buff_target_copy, main_timestamp, make_buff_gimbal_state(gimbal_state), true);
+        buff_aimer.mpc_aim(buff_target_copy, main_timestamp, io::to_gimbal_state(gimbal_state), true);
 
       command.control = buff_plan.control;
       command.shoot = buff_plan.fire;
       command.yaw = tools::limit_rad(buff_plan.yaw);
       command.pitch = buff_plan.pitch;
-      command.big_yaw = nearest_continuous_yaw_rad(command.yaw, gimbal_state.big_yaw);
+      command.big_yaw = auto_aim::nearest_continuous_yaw_rad(command.yaw, gimbal_state.big_yaw);
       command.small_yaw = command.yaw;
       command.has_target_yaw = command.control;
 
@@ -655,8 +284,8 @@ int main(int argc, char * argv[])
       buff_hold_command.reset();
       auto read_omni_frame = [&](io::USBCamera & camera, cv::Mat & img,
                                  std::chrono::steady_clock::time_point & ts,
-                                 const OmniCamConfig & cam_cfg) {
-          OmniCandidateFrame frame;
+                                 const omniperception::OmniCamConfig & cam_cfg) {
+          omniperception::OmniCandidateFrame frame;
           frame.result.cam = cam_cfg;
           const bool ok = camera.read_with_timeout(img, ts, omni_read_timeout);
           if (!ok || img.empty()) {
@@ -683,16 +312,12 @@ int main(int argc, char * argv[])
         back_frame.result.armors = yolo_omni_back->detect(back_img, frame_count);
       }
 
-      auto finalize_frame = [&](OmniCandidateFrame & frame, const OmniCamConfig & cam_cfg) {
+      auto finalize_frame = [&](omniperception::OmniCandidateFrame & frame,
+                                const omniperception::OmniCamConfig & cam_cfg) {
           decider.armor_filter(frame.result.armors);
           decider.set_priority(frame.result.armors);
-          apply_armor_target_mask(frame.result.armors, armor_target_mask);
-          frame.result.top_armor = pick_top_armor(frame.result.armors);
-          if (frame.result.top_armor.has_value()) {
-            frame.result.delta_yaw_deg =
-              calc_delta_angle_deg(frame.result.top_armor.value(), cam_cfg).first;
-            frame.candidate = build_omni_candidate(frame.result, frame.timestamp, frame.base_big_yaw_rad);
-          }
+          auto_aim::apply_armor_target_mask(frame.result.armors, armor_target_mask);
+          omniperception::fill_omni_candidate(frame, cam_cfg.spec);
         };
 
       finalize_frame(left_frame, left_cam_cfg);
@@ -704,7 +329,7 @@ int main(int argc, char * argv[])
       const auto reference_omni_target = omniperception::select_omni_retarget_reference_target(
         session_accepted_omni_target, cooldown_anchor_omni_target, omni_retarget_cd_active);
 
-      std::vector<OmniCandidateFrame> candidate_frames;
+      std::vector<omniperception::OmniCandidateFrame> candidate_frames;
       if (left_frame.candidate.has_value()) candidate_frames.push_back(left_frame);
       if (right_frame.candidate.has_value()) candidate_frames.push_back(right_frame);
       if (back_frame.candidate.has_value()) candidate_frames.push_back(back_frame);
@@ -724,11 +349,12 @@ int main(int argc, char * argv[])
         if (decision.accept) {
           command = selected_candidate->command;
           omni_hold_command = command;
-          const auto accepted_target = make_accepted_omni_target(selected_candidate.value());
+          const auto accepted_target =
+            omniperception::make_accepted_omni_target(selected_candidate.value());
           session_accepted_omni_target = accepted_target;
           if (
             !active_omni_timeout_running || !active_omni_timeout_target.has_value() ||
-            !same_omni_target_continuation(
+            !omniperception::same_omni_target_continuation(
               active_omni_timeout_target.value(), accepted_target, omni_retarget_min_delta_deg)) {
             active_omni_timeout_started_at = now;
             active_omni_timeout_running = true;
@@ -745,7 +371,8 @@ int main(int argc, char * argv[])
           omni_hold_command = command;
         }
       } else if (omni_hold_command.has_value()) {
-        const double target_error_deg = angular_distance_deg(omni_hold_command->big_yaw, gimbal_state.big_yaw);
+        const double target_error_deg =
+          omniperception::angular_distance_deg(omni_hold_command->big_yaw, gimbal_state.big_yaw);
         if (target_error_deg > omni_hold_release_tolerance_deg) {
           command = omni_hold_command.value();
         } else {
@@ -762,7 +389,8 @@ int main(int argc, char * argv[])
             std::chrono::duration<double, std::milli>(now - active_omni_timeout_started_at).count();
         }
 
-        const double target_error_deg = angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
+        const double target_error_deg =
+          omniperception::angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
         if (target_error_deg > omni_hold_release_tolerance_deg) {
           if (
             active_omni_timeout_running &&
@@ -781,7 +409,8 @@ int main(int argc, char * argv[])
       }
 
       if (command.control && command.has_target_yaw) {
-        omni_target_error_deg = angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
+        omni_target_error_deg =
+          omniperception::angular_distance_deg(command.big_yaw, gimbal_state.big_yaw);
         omni_target_reached = omni_target_error_deg.value() <= omni_hold_release_tolerance_deg;
         if (omni_hold_command.has_value() && omni_target_reached) {
           omni_hold_command.reset();
@@ -814,10 +443,10 @@ int main(int argc, char * argv[])
       } else {
         command = aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
         if (command.control && !targets.empty()) {
-          apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
+          auto_aim::apply_sentry_tracking_yaws(command, targets.front(), gimbal_state.big_yaw);
         }
         command.shoot = shooter.shoot(command, aimer, targets, ypr, tracker_state == "tracking");
-        fill_nav_target_info(command, targets);
+        auto_aim::fill_nav_target_info(command, targets);
       }
 
       const bool outpost_convergence = 
@@ -830,7 +459,7 @@ int main(int argc, char * argv[])
       }
       
       const bool unlocked_outpost =
-        !targets.empty() && is_unlocked_outpost_target(targets.front());
+        !targets.empty() && auto_aim::is_unlocked_outpost_target(targets.front());
       double small_yaw_vel = 0.0;
       double pitch_vel = 0.0;
       double small_yaw_acc = 0.0;

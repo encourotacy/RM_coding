@@ -17,6 +17,7 @@ add_library(auto_aim OBJECT
     tracker.cpp
     voter.cpp
     shooter.cpp
+    sentry_command.cpp
     yolo.cpp
     yolos/yolov5.cpp
     yolos/yolov8.cpp

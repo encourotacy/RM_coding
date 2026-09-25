@@ -4,12 +4,19 @@
 #include <chrono>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <string>
 #include <thread>
 
 #include "tools/thread_safe_queue.hpp"
 
 namespace io
 {
+inline std::string normalize_dev_name(const std::string & dev)
+{
+  if (dev.rfind("/dev/", 0) == 0) return dev.substr(5);
+  return dev;
+}
+
 class USBCamera
 {
 public:

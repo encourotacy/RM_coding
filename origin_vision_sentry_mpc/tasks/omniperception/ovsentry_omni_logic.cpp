@@ -2,16 +2,24 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
+#include "tasks/auto_aim/sentry_command.hpp"
 #include "tools/math_tools.hpp"
 
 namespace omniperception
 {
-namespace
-{
 double angular_distance_deg(double lhs_rad, double rhs_rad)
 {
   return std::abs(tools::limit_rad(lhs_rad - rhs_rad)) * 57.3;
+}
+
+namespace
+{
+bool better_armor(const auto_aim::Armor & lhs, const auto_aim::Armor & rhs)
+{
+  if (lhs.priority != rhs.priority) return lhs.priority < rhs.priority;
+  return lhs.confidence > rhs.confidence;
 }
 
 bool same_target_continuation(
@@ -35,6 +43,82 @@ double reference_delta_deg(
 }
 
 }  // namespace
+
+std::optional<auto_aim::Armor> pick_top_armor(const std::list<auto_aim::Armor> & armors)
+{
+  if (armors.empty()) return std::nullopt;
+  auto best_it = armors.begin();
+  for (auto it = std::next(armors.begin()); it != armors.end(); ++it) {
+    if (better_armor(*it, *best_it)) best_it = it;
+  }
+  return *best_it;
+}
+
+std::pair<double, double> calc_delta_angle_deg(
+  const auto_aim::Armor & armor, const CameraSpec & cam)
+{
+  const double delta_yaw = cam.center_yaw_deg + (0.5 - armor.center_norm.x) * cam.fov_h_deg;
+  const double delta_pitch = (armor.center_norm.y - 0.5) * cam.fov_v_deg;
+  return {delta_yaw, delta_pitch};
+}
+
+std::optional<OmniCandidate> build_omni_candidate(
+  const auto_aim::Armor & armor, OmniCameraSlot slot, double delta_yaw_deg,
+  std::chrono::steady_clock::time_point timestamp, double base_big_yaw_rad)
+{
+  OmniCandidate candidate;
+  candidate.slot = slot;
+  candidate.armor_name = armor.name;
+  candidate.priority = armor.priority;
+  candidate.confidence = armor.confidence;
+  candidate.timestamp = timestamp;
+  candidate.base_big_yaw_rad = base_big_yaw_rad;
+  candidate.abs_yaw_rad = base_big_yaw_rad + delta_yaw_deg / 57.3;
+  candidate.command.control = true;
+  candidate.command.yaw = tools::limit_rad(candidate.abs_yaw_rad);
+  candidate.command.big_yaw = candidate.abs_yaw_rad;
+  candidate.command.small_yaw = candidate.command.yaw;
+  candidate.command.has_target_yaw = true;
+  candidate.command.armor_id = auto_aim::armor_name_to_nav_id(armor.name);
+  candidate.command.pitch = 0.26;
+  return candidate;
+}
+
+double fill_omni_candidate(OmniCandidateFrame & frame, const CameraSpec & spec)
+{
+  frame.result.top_armor = pick_top_armor(frame.result.armors);
+  if (!frame.result.top_armor.has_value()) return 0.0;
+
+  const auto [delta_yaw_deg, delta_pitch_deg] =
+    calc_delta_angle_deg(frame.result.top_armor.value(), spec);
+  frame.result.delta_yaw_deg = delta_yaw_deg;
+  frame.candidate = build_omni_candidate(
+    frame.result.top_armor.value(), spec.slot, delta_yaw_deg, frame.timestamp,
+    frame.base_big_yaw_rad);
+  return delta_pitch_deg;
+}
+
+AcceptedOmniTarget make_accepted_omni_target(const OmniCandidate & candidate)
+{
+  AcceptedOmniTarget accepted_target;
+  accepted_target.slot = candidate.slot;
+  accepted_target.armor_name = candidate.armor_name;
+  accepted_target.priority = candidate.priority;
+  accepted_target.confidence = candidate.confidence;
+  accepted_target.timestamp = candidate.timestamp;
+  accepted_target.base_big_yaw_rad = candidate.base_big_yaw_rad;
+  accepted_target.abs_yaw_rad = candidate.abs_yaw_rad;
+  accepted_target.command = candidate.command;
+  return accepted_target;
+}
+
+bool same_omni_target_continuation(
+  const AcceptedOmniTarget & lhs, const AcceptedOmniTarget & rhs, double retarget_min_delta_deg)
+{
+  if (lhs.slot != rhs.slot) return false;
+  if (lhs.armor_name != rhs.armor_name) return false;
+  return angular_distance_deg(lhs.abs_yaw_rad, rhs.abs_yaw_rad) < retarget_min_delta_deg;
+}
 
 std::optional<AcceptedOmniTarget> select_omni_retarget_reference_target(
   const std::optional<AcceptedOmniTarget> & session_target,
