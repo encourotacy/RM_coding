@@ -1,0 +1,175 @@
+enemy_color: "red"
+# enemy_color: "blue"
+
+
+#####-----神经网络参数-----#####
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx
+yolo11_model_path: assets/yolo11.xml
+yolov8_model_path: assets/yolov8.xml
+yolov5_model_path: assets/yolov5_0526.xml
+device: GPU
+auto_aim_device: GPU
+omni_device: GPU
+min_confidence: 0.8 
+use_traditional: false
+
+#####-----ROI-----#####
+roi: 
+  x: 420
+  y: 350
+  width: 600
+  height: 600
+
+use_roi: false
+
+#####-----USB相机参数-----#####
+image_width: 1920
+image_height: 1080
+fov_h: 57.7 #87.7
+fov_v: 56.7 
+new_fov_h: 27 #67
+new_fov_v: 40.9
+usb_frame_rate: 50
+usb_exposure: 200 #1-80000______250
+usb_gamma: 160
+usb_gain: 20 #0-96
+usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
+omni_camera_read_timeout_ms: 10
+omni_left_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.4:1.0-video-index0"
+omni_right_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.2:1.0-video-index0"
+omni_back_path: "v4l/by-path/pci-0000:00:14.0-usb-0:5.3:1.0-video-index0"
+omni_left_yaw_deg: 60.0
+omni_right_yaw_deg: -60.0
+omni_back_yaw_deg: 180.0
+omni_fov_h_deg: 120.0
+omni_fov_v_deg: 67.0
+
+#####-----工业相机参数-----#####
+camera_name: "hikrobot"
+exposure_ms: 3
+gain: 14
+vid_pid: "2bdf:0001"
+
+#####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+
+#####-----cboard参数-----#####
+quaternion_canid: 0x01
+bullet_speed_canid: 0x110
+send_canid: 0xff
+can_interface: "can0"
+
+#####-----时序参数-----#####
+timing:
+  offset: 0.002 # s, 图像时间戳到姿态查询的固定补偿
+
+#####-----ROS2云台桥参数-----#####
+ros2_gimbal:
+  node_name: "nav_gimbal_bridge"
+  status_topic: "/serial/gimbal_status"
+  cmd_topic: "/serial/process_gimbal"
+  # [[deprecated(cyclonedds)]] typed messages no longer need type name strings
+  # status_msg_type: "rm_interfaces/msg/Gimbal"
+  # cmd_msg_type: "rm_interfaces/msg/GimbalCmd"
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 25
+outpost_max_temp_lost_count: 75
+outpost_layer_correction_enabled: true
+outpost_layer_correction_frames: 3
+outpost_layer_switch_frames: 3 # consecutive frames required for a locked-layer switch
+outpost_layer_correction_z_gate: 0.06
+
+#####-----aimer参数-----#####
+yaw_offset: 0.75 # degree -2.5
+pitch_offset: -0.75 # degree 
+comming_angle: 60 # degree
+leaving_angle: 20 # degree
+outpost_aim_coming_angle: 30 # degree, front-facing outpost aim candidate window
+outpost_aim_leaving_angle: 45 # degree, keep target plate stable after it passes center
+resistance_k: 0.023 # 空气阻力系数
+decision_speed: 10 # rad/s
+high_speed_delay_time: 0.063 # s
+low_speed_delay_time: 0.05 # s
+
+
+#####-----shooter参数-----#####
+first_tolerance: 5 # 近距离射击容差，degree
+second_tolerance: 5 # 远距离射击容差，degree
+judge_distance: 3 # 距离判断阈值，m
+auto_fire: true # 是否由自瞄控制射击
+high_spin_force_fire_enabled: true
+high_spin_force_fire_enter_speed: 11.0 # rad/s
+high_spin_force_fire_exit_speed: 9.0 # rad/s
+outpost_fire_require_locked: true
+outpost_phase_fire_enabled: true # 是否启用前哨站按相位窗口控制开火
+outpost_static_fire_enabled: true # 是否启用前哨站静止开火模式
+outpost_static_fire_require_locked: false # 静止模式是否仍要求三层锁定
+outpost_static_direct_aim_enabled: true # 静止前哨直接瞄当前看到的装甲，不做三层关联
+outpost_static_speed_threshold: 0.15 # 小于该角速度(rad/s)视为静止
+outpost_static_motion_confirm_frames: 3 # consecutive frames required to change static/moving mode
+outpost_fire_coming_angle: 30.0 # degree, coming-side fire window before center
+outpost_fire_leaving_angle: 45.0 # degree, leaving-side fire window after center
+# 实际弹频由下位机/枪控决定，视觉端只在上述相位窗口内持续给出 fire_advice
+
+#####-----decider参数-----#####
+mode: 1
+detect_interval: 2
+
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+omni_retarget_cooldown_s: 2.5 # omni大幅重定向CD，防止主相机未接上时连续大角度来回转
+omni_retarget_min_delta_deg: 20.0 # 仅大于该角度的新omni目标才算一次新的大幅重定向
+omni_detection_stale_ms: 120.0 # 多线程omni检测结果的时效窗口，避免略旧结果触发切换
+omni_hold_release_tolerance_deg: 3.0 # omni重定向命令只有在big_yaw误差进入该阈值后才释放本地hold
+omni_command_timeout_s: 0.5 # omni目标命令若在该时间内未达到目标角度，则停止发送并保持lost
+main_lost_cmd_hold_s: 0.25 # 主相机tracker进入lost后，继续发送上一条主相机控制命令的持续时间
+buff_lost_cmd_hold_s: 0.30 # 小符检测或规划短暂失效时，继续占有云台且停火的持续时间
+small_assoc_max_jump_px: 140.0 # 小符检测中心相对上一帧的最大允许跳变，px
+small_assoc_reacquire_frames: 2 # 连续大跳变后立即重新锁定，避免长期沿用巡航前的旧目标
+
+#####-----工业相机标定参数-----#####
+
+
+# 相机同理想情况的偏角: yaw1 pitch0.8 roll0.48 degree
+R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.999814650151, 0.008132541389, -0.017450705247, -0.008376665811, -0.999867435708, 0.013962180339]
+t_camera2gimbal: [0.081834836810026332, 0.0038077150929364738, 0.087564665738670097]
+
+# 重投影误差: 0.0880px
+camera_matrix: [2392.7002715785816, 0, 703.95329780475095, 0, 2392.1064206907113, 551.23534841836909, 0, 0, 1]
+distort_coeffs: [-0.070281213351805649, 0.3722108258423531, -0.0003091735287484376, -0.00047455916552131253, 0]
+
+#####-----planner-----#####
+fire_thresh: 0.0035
+
+max_yaw_acc: 50 
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+
+max_pitch_acc: 100
+Q_pitch: [9e6, 0]
+R_pitch: [1]
+
+#####-----buff_detector参数-----#####
+ConfidenceThreshold: 0.5
+IouThreshold: 0.2
+model: "assets/buff_repvgg.xml"
+big_buff_model: "assets/yolo11-buff-nano-v5.xml"
+big_buff_confidence_threshold: 0.30
+big_buff_iou_threshold: 0.80
+
+#####-----buff_aimer参数-----#####
+fire_gap_time: 0.3 # s
+predict_time: 0.0 # s
+buff_aim_radius_m: 0.70 # 小符最终瞄点半径；增大向外打，减小向内打
