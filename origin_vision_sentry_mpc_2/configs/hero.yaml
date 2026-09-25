@@ -1,0 +1,98 @@
+#enemy_color: "red"
+enemy_color: "blue"
+
+#####-----感知与模型参数-----#####
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx
+yolo11_model_path: assets/yolo11.xml
+yolov8_model_path: assets/yolov8.xml
+yolov5_model_path: assets/yolov5_0526.xml
+device: CPU
+threshold: 150
+min_confidence: 0.8
+use_traditional: false
+use_roi: false
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+#####-----传统检测参数-----#####
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----跟踪参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 15
+outpost_max_temp_lost_count: 75
+
+#####-----Singer模型参数-----#####
+singer:
+  enabled: true
+  alpha_xy: 20.0
+  sigma_m_xy: 300.0
+  z_acceleration_variance: 100.0
+  yaw_acceleration_variance: 400.0
+
+#####-----瞄准参数-----#####
+yaw_offset: 0 # degree
+pitch_offset: 0 # degree
+comming_angle: 60 # degree
+leaving_angle: 20 # degree
+resistance_k: 0.023 # 空气阻力系数
+decision_speed: 3.8 # rad/s
+decision_speed_enter: 3.8 # rad/s
+decision_speed_exit: 3.0 # rad/s
+low_speed_threshold: 2.8 # rad/s
+low_speed_threshold_exit: 3.4 # rad/s
+high_speed_delay_time: 0.015 # s
+low_speed_delay_time: 0.015 # s
+
+#####-----射击参数-----#####
+first_tolerance: 3 # degree
+second_tolerance: 2 # degree
+judge_distance: 2
+auto_fire: true
+high_spin_force_fire_enabled: false
+high_spin_force_fire_enter_speed: 12.0 # rad/s
+high_spin_force_fire_exit_speed: 9.0 # rad/s
+
+#####-----时序参数-----#####
+timing:
+  offset: -0.001 # s, 串口姿态固定时间补偿
+
+#####-----工业相机参数-----#####
+camera_name: "hikrobot"
+exposure_ms: 2
+gain: 16
+vid_pid: "2bdf:0001"
+
+#####-----标定参数-----#####
+R_gimbal2imubody: [0, -1, 0, 1, 0, 0, 0, 0, 1]
+#重投影误差: 0.0843px
+camera_matrix: [1818.5383064235446, 0, 740.80714037204257, 0, 1818.2882134801127, 547.95350466079719, 0, 0, 1]
+distort_coeffs: [-0.072507922547322884, 0.20046440534492133, 0.00045790032997855014, 0.00025204893262806066, 0]
+# 相机同理想情况的偏角: yaw-0.45 pitch-7.96 roll0.37 degree
+R_camera2gimbal: [0.024858220956596074, -0.06919988102439675, 0.9972930588934641, -0.9996702287216687, 0.004708107509765381, 0.025244158358781296, -0.006442255695001903, -0.9975917051529077, -0.0690600257144058]
+t_camera2gimbal: [0.13834003036025491, -0.00073854354146221993, 0.072377378238828047]
+
+#####-----规划参数-----#####
+fire_thresh: 0.03
+max_yaw_acc: 200
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+max_pitch_acc: 100
+Q_pitch: [9e6, 0]
+R_pitch: [1]
+
+#####-----打符参数-----#####
+model: "assets/yolo11_buff_int8.xml"
+fire_gap_time: 0.520 # s
+predict_time: 0.100 # s

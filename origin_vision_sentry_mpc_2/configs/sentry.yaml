@@ -1,0 +1,171 @@
+enemy_color: "red"
+#enemy_color: "blue"
+
+
+#####-----神经网络参数-----#####
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx
+yolo11_model_path: assets/yolo11.xml
+yolov8_model_path: assets/yolov8.xml
+yolov5_model_path: assets/yolov5_0526.xml
+device: GPU
+auto_aim_device: GPU
+omni_device: GPU
+classifier_device: GPU
+min_confidence: 0.8
+use_traditional: true
+
+#####-----ROI-----#####
+roi: 
+  x: 420
+  y: 350
+  width: 600
+  height: 600
+
+use_roi: false
+
+#####-----USB相机参数-----#####
+image_width: 1440
+image_height: 1080
+fov_h: 57.7 #87.7
+fov_v: 56.7 
+new_fov_h: 27 #67
+new_fov_v: 40.9
+usb_frame_rate: 50
+usb_exposure: 200 #1-80000______250
+usb_gamma: 160
+usb_gain: 20 #0-96
+usb_max_reopen_attempts: 0 # 0表示持续重连，不因累计重连次数放弃
+omni_camera_read_timeout_ms: 10
+omni_right_path: "/dev/video0"
+omni_left_path: "/dev/video2"
+omni_back_path: ""
+omni_left_yaw_deg: 120.0
+omni_right_yaw_deg: -120.0
+omni_back_yaw_deg: 180.0
+omni_fov_h_deg: 120.0
+omni_fov_v_deg: 67.0
+
+#####-----工业相机参数-----#####
+camera_name: "hikrobot"
+exposure_ms: 5
+gain: 15
+vid_pid: "2bdf:0001"
+
+#####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+min_confidence: 0.8
+
+#####-----cboard参数-----#####
+quaternion_canid: 0x01
+bullet_speed_canid: 0x110
+send_canid: 0xff
+can_interface: "can0"
+
+#####-----时序参数-----#####
+timing:
+  offset: 0.001 # s, 图像时间戳到姿态查询的固定补偿
+
+#####-----ROS2云台桥参数-----#####
+ros2_gimbal:
+  node_name: "nav_gimbal_bridge"
+  status_topic: "/serial/gimbal_status"
+  cmd_topic: "/serial/process_gimbal"
+  # 实机 IMU 世界 yaw 比电控 yaw 零位大 180°；旋转 IMU 世界系后再做解算，统一 small/big yaw 坐标。
+  imu_world_yaw_offset_deg: -180.0
+  # Gimbal 状态中的 big_yaw 位于 yaw 与 mode 之间，角度单位为 degree。
+  status_msg_type: "rm_interfaces/msg/Gimbal"
+  cmd_msg_type: "rm_interfaces/msg/GimbalCmd"
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 25
+outpost_max_temp_lost_count: 75
+
+#####-----云台轴序参数-----#####
+gimbal_axis_order: pitch_yaw # yaw_pitch: yaw轴在外；pitch_yaw: pitch轴在外
+
+#####-----aimer参数-----#####
+yaw_offset: 2.3 # degree -2.5
+pitch_offset: -0.5  # degree 2
+
+comming_angle: 60 # degree
+leaving_angle: 20 # degree
+resistance_k: 0.023 # 空气阻力系数
+decision_speed: 8 # rad/s
+high_speed_delay_time: 0.073 # s
+low_speed_delay_time: 0.08 # s
+# Extra prediction time for the outpost only. Negative values reduce its aim lead.
+outpost_prediction_offset_s: -0.055
+
+#####-----shooter参数-----#####
+first_tolerance: 7 # 近距离射击容差，degree
+second_tolerance: 7 # 远距离射击容差，degree
+judge_distance: 3 #距离判断阈值
+auto_fire: true # 是否由自瞄控制射击
+high_spin_force_fire_enabled: true
+high_spin_force_fire_enter_speed: 8.0 # rad/s, keep tracking armor and continuously fire
+high_spin_force_fire_exit_speed: 6.0 # rad/s, hysteresis prevents repeated mode switching
+high_spin_center_aim_enabled: true
+high_spin_center_aim_enter_speed: 11.0 # rad/s, aim at vehicle rotation center and continuously fire
+high_spin_center_aim_exit_speed: 9.0 # rad/s
+outpost_fire_require_locked: true
+
+outpost_fire_enter_angle: 45 .0 # degree, starts firing 5 degrees after facing the shooter
+outpost_fire_exit_angle: 70.0 # degree, larger means longer firing while leaving
+
+#####-----decider参数-----#####
+mode: 1
+omni_retarget_cooldown_s: 2.5 # omni大幅重定向CD，防止主相机未接上时连续大角度来回转
+omni_retarget_min_delta_deg: 20.0 # 仅大于该角度的新omni目标才算一次新的大幅重定向
+omni_detection_stale_ms: 120.0 # 多线程omni检测结果的时效窗口，避免略旧结果触发切换
+omni_hold_release_tolerance_deg: 3.0 # omni重定向命令只有在big_yaw误差进入该阈值后才释放本地hold
+omni_command_timeout_s: 0.5 # omni目标命令若在该时间内未达到目标角度，则停止发送并保持lost
+main_lost_cmd_hold_s: 0.25 # 主相机tracker进入lost后，继续发送上一条主相机控制命令的持续时间
+
+#####-----工业相机标定参数-----#####
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+# Camera::read直接输出原始1440x1080传感器像素（不旋转/不镜像）；下列K、畸变和
+# R_camera2gimbal均按OpenCV原始x向右、y向下、z向前坐标定义。
+# 相机同理想情况的偏角: yaw-15.40 pitch5.06 roll80.99 degree
+R_camera2gimbal: [-0.017334843897, 0.014105771177, 0.999750234012, -0.999814650151, 0.008132541389, -0.017450705247, -0.008376665811, -0.999867435708, 0.013962180339]
+t_camera2gimbal: [0.131971834836810026332, 0.0038077150929364738, -0.040807564665738670097]
+
+
+# 重投影误差: 0.1281px
+camera_matrix: [2433.3288076236572, 0, 646.39331609299018, 0, 2431.9633549421087, 528.45890310433231, 0, 0, 1]
+distort_coeffs: [-0.050822363718653403, 0.25923790410118597, -0.0029062438788101989, -0.0071350967596258289, 0]
+
+#####-----planner-----#####
+fire_thresh: 0.035
+mpc_takeover_time_s: 0.20 # 首次稳定锁定后，从实测关节角平滑接管到MPC轨迹
+mpc_gimbal_status_timeout_s: 0.20 # 状态超过该时间未更新则立即关闭MPC控制
+# 所有目标共用同一物理pitch软件限位；内部负值为抬头。
+# 允许车辆在前哨站下方使用大仰角，不再按目标类别或计划-实测角差分支。
+mpc_pitch_min_deg: -60.0
+mpc_pitch_max_deg: 30.0
+
+max_yaw_acc: 50
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+
+max_pitch_acc: 100
+Q_pitch: [9e6, 0]
+R_pitch: [1]
+mpc_max_iter: 20 # 10次时正常pitch轨迹可能未收敛；未收敛结果始终禁止开火
+
+#####-----buff_detector参数-----#####
+model: "assets/yolo11_buff_int8.xml"
+
+#####-----buff_aimer参数-----#####
+fire_gap_time: 0.520 # s
+predict_time: 0.100 # s

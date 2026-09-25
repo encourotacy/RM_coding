@@ -1,0 +1,19 @@
+pattern_cols: 11
+pattern_rows: 8
+square_size_mm: 30
+preview_scale: 0.5
+detect_interval: 2
+
+R_gimbal2imubody: [0, 0, -1, -1, 0, 0, 0, -1, 0]
+
+camera_name: "hikrobot"
+exposure_ms: 5
+gain: 15.0
+vid_pid: "2bdf:0001"
+
+timing:
+  offset: 0.002
+
+# 重投影误差: 0.1281px
+camera_matrix: [2433.3288076236572, 0, 646.39331609299018, 0, 2431.9633549421087, 528.45890310433231, 0, 0, 1]
+distort_coeffs: [-0.050822363718653403, 0.25923790410118597, -0.0029062438788101989, -0.0071350967596258289, 0]
