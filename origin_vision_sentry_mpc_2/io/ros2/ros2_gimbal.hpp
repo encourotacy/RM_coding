@@ -51,6 +51,7 @@ public:
     bool control, bool fire, double big_yaw, double small_yaw, double pitch, double yaw_vel,
     double pitch_vel, double yaw_acc, double pitch_acc, uint8_t armor_id = 0, double vx = 0.0,
     double vy = 0.0, double distance = 0.0);
+  void release_control();
 
   double bullet_speed() const;
   Mode mode() const;

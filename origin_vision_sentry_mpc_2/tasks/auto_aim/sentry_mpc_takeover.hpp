@@ -6,7 +6,9 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 
+#include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
 #include "tasks/auto_aim/sentry_yaw_control.hpp"
 
@@ -44,6 +46,22 @@ public:
   }
 
   void reset() { active_ = false; }
+
+  // 身份变化时重新从当前关节接管。reset() 只打断插值，身份保留。
+  void begin_target(ArmorName name, ArmorType armor_type, bool aim_center)
+  {
+    const TargetSession session{name, armor_type, aim_center};
+    if (!target_session_.has_value() || !(target_session_.value() == session)) {
+      reset();
+      target_session_ = session;
+    }
+  }
+
+  void clear_target()
+  {
+    reset();
+    target_session_.reset();
+  }
 
   SentryMpcSetpoint update(
     const Plan & plan, double center_world_yaw, double current_small_yaw,
@@ -121,6 +139,18 @@ public:
   }
 
 private:
+  struct TargetSession
+  {
+    ArmorName name;
+    ArmorType armor_type;
+    bool aim_center = false;
+
+    bool operator==(const TargetSession & rhs) const
+    {
+      return name == rhs.name && armor_type == rhs.armor_type && aim_center == rhs.aim_center;
+    }
+  };
+
   struct Blend
   {
     double position = 0.0;
@@ -214,6 +244,7 @@ private:
   double yaw_acceleration_scale_ = std::numeric_limits<double>::infinity();
   double pitch_acceleration_scale_ = std::numeric_limits<double>::infinity();
   bool active_ = false;
+  std::optional<TargetSession> target_session_;
   std::chrono::steady_clock::time_point started_at_{};
   double start_small_yaw_ = 0.0;
   double start_small_yaw_vel_ = 0.0;

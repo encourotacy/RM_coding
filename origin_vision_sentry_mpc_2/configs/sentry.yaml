@@ -119,7 +119,7 @@ high_spin_center_aim_enter_speed: 11.0 # rad/s, aim at vehicle rotation center a
 high_spin_center_aim_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
 
-outpost_fire_enter_angle: 45 .0 # degree, starts firing 5 degrees after facing the shooter
+outpost_fire_enter_angle: 45.0 # degree, starts firing 5 degrees after facing the shooter
 outpost_fire_exit_angle: 70.0 # degree, larger means longer firing while leaving
 
 #####-----decider参数-----#####

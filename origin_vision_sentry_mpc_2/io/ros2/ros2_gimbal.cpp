@@ -216,6 +216,11 @@ void ROS2Gimbal::send_mpc(
   }
 }
 
+void ROS2Gimbal::release_control()
+{
+  send_mpc(false, false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0);
+}
+
 ROS2Gimbal::ROS2Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
@@ -265,6 +270,8 @@ ROS2Gimbal::ROS2Gimbal(const std::string & config_path)
 
 ROS2Gimbal::~ROS2Gimbal()
 {
+  // 先停控，再拆掉还在发布这条指令的 executor。
+  release_control();
   if (executor_) executor_->cancel();
   if (spin_thread_.joinable()) spin_thread_.join();
   if (executor_ && node_) executor_->remove_node(node_);

@@ -409,5 +409,81 @@ int main()
     return 1;
   }
 
+  auto_aim::SentryMpcTakeover session_takeover(0.2);
+  auto_aim::Plan session_plan;
+  session_plan.control = true;
+  session_plan.yaw = 0.4F;
+  session_plan.pitch = -0.2F;
+  const auto session_update = [&](std::chrono::milliseconds elapsed) {
+    return session_takeover.update(
+      session_plan, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, t0 + elapsed);
+  };
+
+  session_takeover.begin_target(auto_aim::ArmorName::three, auto_aim::ArmorType::small, false);
+  const auto session_start = session_update(std::chrono::milliseconds(0));
+  const auto session_mid = session_update(std::chrono::milliseconds(100));
+  if (!expect(
+        session_start.takeover_alpha < 1e-6 &&
+          session_mid.takeover_alpha > session_start.takeover_alpha,
+        "target session did not start a takeover blend")) {
+    return 1;
+  }
+
+  session_takeover.begin_target(auto_aim::ArmorName::three, auto_aim::ArmorType::small, false);
+  const auto session_same = session_update(std::chrono::milliseconds(150));
+  if (!expect(
+        session_same.takeover_alpha > session_mid.takeover_alpha,
+        "unchanged target session restarted the takeover blend")) {
+    return 1;
+  }
+
+  session_takeover.reset();
+  const auto session_after_reset = session_update(std::chrono::milliseconds(200));
+  const auto session_after_reset_mid = session_update(std::chrono::milliseconds(300));
+  session_takeover.begin_target(auto_aim::ArmorName::three, auto_aim::ArmorType::small, false);
+  const auto session_same_after_reset = session_update(std::chrono::milliseconds(350));
+  if (!expect(
+        session_after_reset.takeover_alpha < 1e-6 &&
+          session_same_after_reset.takeover_alpha > session_after_reset_mid.takeover_alpha,
+        "interpolation reset cleared the target session")) {
+    return 1;
+  }
+
+  session_takeover.begin_target(auto_aim::ArmorName::four, auto_aim::ArmorType::small, false);
+  const auto session_new_name = session_update(std::chrono::milliseconds(400));
+  if (!expect(
+        session_new_name.takeover_alpha < 1e-6,
+        "changed armor name kept the previous takeover blend")) {
+    return 1;
+  }
+
+  (void)session_update(std::chrono::milliseconds(450));
+  session_takeover.begin_target(auto_aim::ArmorName::four, auto_aim::ArmorType::big, false);
+  const auto session_new_type = session_update(std::chrono::milliseconds(500));
+  if (!expect(
+        session_new_type.takeover_alpha < 1e-6,
+        "changed armor type kept the previous takeover blend")) {
+    return 1;
+  }
+
+  (void)session_update(std::chrono::milliseconds(550));
+  session_takeover.begin_target(auto_aim::ArmorName::four, auto_aim::ArmorType::big, true);
+  const auto session_new_aim = session_update(std::chrono::milliseconds(600));
+  if (!expect(
+        session_new_aim.takeover_alpha < 1e-6,
+        "changed center-aim mode kept the previous takeover blend")) {
+    return 1;
+  }
+
+  (void)session_update(std::chrono::milliseconds(650));
+  session_takeover.clear_target();
+  session_takeover.begin_target(auto_aim::ArmorName::four, auto_aim::ArmorType::big, true);
+  const auto session_after_clear = session_update(std::chrono::milliseconds(700));
+  if (!expect(
+        session_after_clear.takeover_alpha < 1e-6,
+        "clear_target kept the previous target session")) {
+    return 1;
+  }
+
   return 0;
 }
