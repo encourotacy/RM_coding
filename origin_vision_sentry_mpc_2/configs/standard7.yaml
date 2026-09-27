@@ -1,5 +1,5 @@
 enemy_color: "red"
-#enemy_color: "blue"
+# enemy_color: "blue"
 
 
 #####-----神经网络参数-----#####
@@ -72,7 +72,7 @@ can_interface: "can0"
 
 #####-----时序参数-----#####
 timing:
-  offset: 0.001 # s, 图像时间戳到姿态查询的固定补偿
+  offset: 0.002 # s, 图像时间戳到姿态查询的固定补偿
 
 #####-----ROS2云台桥参数-----#####
 ros2_gimbal:
@@ -99,10 +99,10 @@ pitch_offset: -3.0  # degree 2
 
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
-resistance_k: 0.023 # 空气阻力系数
+resistance_k: 0.0 # 空气阻力系数
 decision_speed: 8 # rad/s
 high_speed_delay_time: 0.073 # s
-low_speed_delay_time: 0.08 # s
+low_speed_delay_time: 0.11 # s
 # Extra prediction time for the outpost only. Negative values reduce its aim lead.
 outpost_prediction_offset_s: -0.055
 
@@ -119,8 +119,8 @@ high_spin_center_aim_enter_speed: 11.0 # rad/s, aim at vehicle rotation center a
 high_spin_center_aim_exit_speed: 9.0 # rad/s
 outpost_fire_require_locked: true
 
-outpost_fire_enter_angle: 45.0 # degree, starts firing 5 degrees after facing the shooter
-outpost_fire_exit_angle: 70.0 # degree, larger means longer firing while leaving
+outpost_fire_enter_angle: 35.0 # degree, starts firing 5 degrees after facing the shooter
+outpost_fire_exit_angle: 60.0 # degree, larger means longer firing while leaving
 
 #####-----decider参数-----#####
 mode: 1
@@ -136,12 +136,14 @@ R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
 # Camera::read直接输出原始1440x1080传感器像素（不旋转/不镜像）；下列K、畸变和
 # R_camera2gimbal均按OpenCV原始x向右、y向下、z向前坐标定义。
-# python3 euler_to_matrix.py --yaw 0.45 --pitch 1.3 --roll 0 --ascento
-# 相机同理想情况的偏角: yaw-15.40 pitch5.06 roll80.99 degree
+
+# python3 euler_to_matrix.py --yaw 3.48 --pitch 3.41 --roll 0 --ascento
+# 相机同理想情况的偏角: yaw-1.48 pitch-5.41 roll83.85 degree
 R_camera2gimbal: [-0.060700121050418908, 0.059370918995186428, 0.99638877416505012,
   -0.99815604757195375, -0.0036104795223641062, -0.060592649167651495,
   -0, -0.99822946180489258, 0.059480598389007482]
 t_camera2gimbal: [0.11541496769213655, 0.004315072306283558, -0.03708342385366079]
+
 
 # 重投影误差: 0.1404px
 camera_matrix: [2360.4173834518401, 0, 703.64012002435209, 0, 2357.7451996061423, 595.0989454562266, 0, 0, 1]
@@ -149,7 +151,7 @@ distort_coeffs: [-0.067541223949940096, 0.29506677289645661, 0.00207656259503800
 
 #####-----planner-----#####
 fire_thresh: 0.035
-mpc_takeover_time_s: 0.20 # 首次稳定锁定后，从实测关节角平滑接管到MPC轨迹
+mpc_takeover_time_s: 0 # 首次稳定锁定后，从实测关节角平滑接管到MPC轨迹
 mpc_gimbal_status_timeout_s: 0.20 # 状态超过该时间未更新则立即关闭MPC控制
 # 所有目标共用同一物理pitch软件限位；内部负值为抬头。
 # 允许车辆在前哨站下方使用大仰角，不再按目标类别或计划-实测角差分支。
@@ -167,12 +169,7 @@ mpc_max_iter: 20 # 10次时正常pitch轨迹可能未收敛；未收敛结果始
 
 #####-----buff_detector参数-----#####
 model: "assets/yolo11_buff_int8.xml"
-small_buff_model: "assets/yolo11_buff_int8.xml"
-big_buff_model: "assets/yolo11-buff-nano-v8_red.xml"
 
 #####-----buff_aimer参数-----#####
-aim_mode: "arm" # arm / ring
 fire_gap_time: 0.520 # s
 predict_time: 0.100 # s
-yaw_offset_buff: 2.3 # degree
-pitch_offset_buff: -0.5 # degree

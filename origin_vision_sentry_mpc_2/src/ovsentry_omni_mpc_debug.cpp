@@ -365,8 +365,7 @@ int main(int argc, char * argv[])
   const double omni_retarget_min_delta_deg = read_or("omni_retarget_min_delta_deg", 20.0);
   const double omni_command_timeout_s = read_or("omni_command_timeout_s", 0.5);
   const double main_lost_cmd_hold_s = read_non_negative("main_lost_cmd_hold_s", 0.25);
-  const auto omni_read_timeout =
-    std::chrono::milliseconds(std::max(1, read_or_int("omni_camera_read_timeout_ms", 10)));
+  const auto omni_read_timeout = std::chrono::milliseconds(std::max(1, read_or_int("omni_camera_read_timeout_ms", 10)));
   const auto omni_retarget_cooldown = seconds(omni_retarget_cooldown_s);
   const auto omni_command_timeout = seconds(omni_command_timeout_s);
   const auto main_lost_cmd_hold_duration = seconds(main_lost_cmd_hold_s);

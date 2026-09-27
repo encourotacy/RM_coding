@@ -183,7 +183,7 @@ const double pitch_acc_deg =
   cdr << yaw_acc_deg;
   cdr << pitch_acc_deg;
   cdr << distance;
-  const auto serialized_size = cdr.getSerializedDataLength();
+  const auto serialized_size = cdr.get_serialized_data_length();
   rclcpp::SerializedMessage message(serialized_size);
   auto & raw = message.get_rcl_serialized_message();
   std::memcpy(raw.buffer, buffer.getBuffer(), serialized_size);
