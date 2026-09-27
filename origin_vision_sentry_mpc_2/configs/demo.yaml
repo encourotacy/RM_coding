@@ -83,7 +83,7 @@ can_interface: "can0"
 com_port: "/dev/gimbal"
 
 #####-----planner-----#####
-fire_thresh: 0.003
+fire_thresh: 0.17 # degree
 
 max_yaw_acc: 50
 Q_yaw: [9e6, 0]

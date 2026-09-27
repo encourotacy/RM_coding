@@ -24,12 +24,39 @@ Planner::Planner(const std::string & config_path)
   }
   yaw_offset_ = tools::read<double>(yaml, "yaw_offset") / 57.3;
   pitch_offset_ = tools::read<double>(yaml, "pitch_offset") / 57.3;
-  fire_thresh_ = tools::read<double>(yaml, "fire_thresh");
+  fire_thresh_ = tools::read<double>(yaml, "fire_thresh") / 57.3;
+  is_multiple_thresh_ = yaml["is_multiple_thresh"] && yaml["is_multiple_thresh"].as<bool>();
+  if (is_multiple_thresh_) {
+    planner_judge_distance_ = tools::read<std::vector<double>>(yaml, "planner_judge_distance");
+    planner_fire_thresh_ = tools::read<std::vector<double>>(yaml, "planner_fire_thresh");
+    if (
+      planner_judge_distance_.empty() ||
+      planner_fire_thresh_.size() != planner_judge_distance_.size()) {
+      tools::logger()->warn(
+        "[Planner] fire_thresh array size mismatch, using default fire_thresh");
+      is_multiple_thresh_ = false;
+    }
+  }
   decision_speed_ = tools::read<double>(yaml, "decision_speed");
   high_speed_delay_time_ = tools::read<double>(yaml, "high_speed_delay_time");
   low_speed_delay_time_ = tools::read<double>(yaml, "low_speed_delay_time");
   outpost_prediction_offset_s_ = yaml["outpost_prediction_offset_s"].as<double>(0.0);
   if (!std::isfinite(outpost_prediction_offset_s_)) outpost_prediction_offset_s_ = 0.0;
+  high_spin_force_fire_enabled_ =
+    yaml["high_spin_force_fire_enabled"] && yaml["high_spin_force_fire_enabled"].as<bool>();
+  high_spin_force_fire_enter_speed_ = yaml["high_spin_force_fire_enter_speed"].as<double>(8.0);
+  high_spin_force_fire_exit_speed_ = yaml["high_spin_force_fire_exit_speed"].as<double>(6.0);
+  if (high_spin_force_fire_exit_speed_ > high_spin_force_fire_enter_speed_) {
+    high_spin_force_fire_exit_speed_ = std::max(0.0, high_spin_force_fire_enter_speed_ * 0.75);
+  }
+  outpost_fire_require_locked_ = yaml["outpost_fire_require_locked"].as<bool>(true);
+  outpost_fire_window_enabled_ =
+    static_cast<bool>(yaml["outpost_fire_enter_angle"]) &&
+    static_cast<bool>(yaml["outpost_fire_exit_angle"]);
+  if (outpost_fire_window_enabled_) {
+    outpost_fire_enter_angle_ = yaml["outpost_fire_enter_angle"].as<double>() / 57.3;
+    outpost_fire_exit_angle_ = std::max(0.0, yaml["outpost_fire_exit_angle"].as<double>()) / 57.3;
+  }
 
   setup_yaw_solver(config_path);
   setup_pitch_solver(config_path);
@@ -90,10 +117,12 @@ Plan Planner::plan_impl(
   // an entry point that could keep sending the previous command.
   double yaw0;
   Trajectory traj;
+  double fire_distance = 0.0;
   try {
     const auto selected_aim_point = select_aim_point(target, preferred_armor_id, aim_center);
     const Eigen::Vector3d xyz = selected_aim_point.head<3>();
     const double min_dist = xyz.head<2>().norm();
+    fire_distance = min_dist;
     auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
     if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
     target.predict(bullet_traj.fly_time);
@@ -173,8 +202,67 @@ Plan Planner::plan_impl(
     std::hypot(
       traj(0, HALF_HORIZON + shoot_offset_) - yaw_solver_->work->x(0, HALF_HORIZON + shoot_offset_),
       traj(2, HALF_HORIZON + shoot_offset_) -
-        pitch_solver_->work->x(0, HALF_HORIZON + shoot_offset_)) < fire_thresh_;
+        pitch_solver_->work->x(0, HALF_HORIZON + shoot_offset_)) < fire_thresh_for(fire_distance);
   return plan;
+}
+
+void Planner::update_high_spin(bool enabled_for_target, double angular_speed)
+{
+  if (!high_spin_force_fire_enabled_ || !enabled_for_target || !std::isfinite(angular_speed)) {
+    high_spin_force_fire_active_ = false;
+    return;
+  }
+  if (high_spin_force_fire_active_) {
+    if (angular_speed < high_spin_force_fire_exit_speed_) high_spin_force_fire_active_ = false;
+  } else if (angular_speed >= high_spin_force_fire_enter_speed_) {
+    high_spin_force_fire_active_ = true;
+  }
+}
+
+bool Planner::outpost_phase_in_window(const Target & target, double armor_yaw) const
+{
+  if (!outpost_fire_window_enabled_) return true;
+  const auto x = target.ekf_x();
+  if (x.size() < 8 || !std::isfinite(armor_yaw)) return false;
+  const double phase = tools::limit_rad(armor_yaw - std::atan2(x[2], x[0]));
+  const double yaw_rate = x[7];
+  if (yaw_rate > 1e-3) {
+    return phase >= -outpost_fire_enter_angle_ && phase <= outpost_fire_exit_angle_;
+  }
+  if (yaw_rate < -1e-3) {
+    return phase <= outpost_fire_enter_angle_ && phase >= -outpost_fire_exit_angle_;
+  }
+  return std::abs(phase) <= std::min(outpost_fire_enter_angle_, outpost_fire_exit_angle_);
+}
+
+bool Planner::allow_fire(const Target & target, bool mpc_fire, bool aim_valid, double armor_yaw)
+{
+  const bool is_outpost = target.name == ArmorName::outpost;
+  const auto x = target.ekf_x();
+  const double angular_speed = x.size() >= 8 ? std::abs(x[7]) : 0.0;
+  update_high_spin(!is_outpost, angular_speed);
+
+  if (!aim_valid) return false;
+  if (is_outpost) {
+    if (outpost_fire_require_locked_ && !target.outpost_layer_locked()) return false;
+    if (!outpost_phase_in_window(target, armor_yaw)) return false;
+    return mpc_fire;
+  }
+  return mpc_fire || high_spin_force_fire_active_;
+}
+
+double Planner::fire_thresh_for(double distance) const
+{
+  if (!is_multiple_thresh_) return fire_thresh_;
+
+  double thresh_deg = planner_fire_thresh_.back();
+  for (size_t i = 0; i < planner_judge_distance_.size(); ++i) {
+    if (distance < planner_judge_distance_[i]) {
+      thresh_deg = planner_fire_thresh_[i];
+      break;
+    }
+  }
+  return thresh_deg / 57.3;
 }
 
 Plan Planner::plan(std::optional<Target> target, double bullet_speed)

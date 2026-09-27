@@ -23,7 +23,6 @@
 #include "tasks/auto_aim/sentry_mpc_safety.hpp"
 #include "tasks/auto_aim/sentry_mpc_takeover.hpp"
 #include "tasks/auto_aim/sentry_mpc_transform.hpp"
-#include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -91,6 +90,12 @@ cv::Scalar slot_color(omniperception::OmniCameraSlot slot)
 }
 
 bool is_buff_mode(io::Mode mode) { return mode == io::small_buff || mode == io::big_buff; }
+
+void keep_only_outpost(std::list<auto_aim::Armor> & armors)
+{
+  armors.remove_if(
+    [](const auto_aim::Armor & armor) { return armor.name != auto_aim::ArmorName::outpost; });
+}
 
 const char * gimbal_mode_name(io::Mode mode)
 {
@@ -412,7 +417,6 @@ int main(int argc, char * argv[])
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
-  auto_aim::Shooter shooter(config_path);
   auto_aim::Planner planner(config_path);
   auto_aim::SentryMpcTakeover takeover(takeover_time_s, max_yaw_acc, max_pitch_acc);
   auto_aim::SentryMpcSafetyGate safety_gate(safety_limits);
@@ -587,6 +591,7 @@ int main(int argc, char * argv[])
     auto gimbal_state = initial_gimbal_state;
     const auto gimbal_mode = gimbal->mode();
     const bool buff_mode = is_buff_mode(gimbal_mode);
+    const bool outpost_mode = gimbal_mode == io::outpost;
     const Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
     auto t0 = std::chrono::steady_clock::now();
@@ -602,6 +607,7 @@ int main(int argc, char * argv[])
       t0 = std::chrono::steady_clock::now();
       armors = yolo_auto.detect(main_img, frame_count);
       t1 = std::chrono::steady_clock::now();
+      if (outpost_mode) keep_only_outpost(armors);
       decider.armor_filter(armors);
       decider.set_priority(armors);
       auto_aim::apply_armor_target_mask(armors, armor_target_mask);
@@ -660,7 +666,6 @@ int main(int argc, char * argv[])
     std::optional<auto_aim::SentryMpcSetpoint> main_mpc_setpoint;
     bool tracker_control_ready = false;
     bool aim_point_ready = false;
-    bool high_spin_center_aim_active = false;
 
     // #####-----打符本帧状态-----#####
     std::optional<auto_buff::PowerRune> buff_power_runes;
@@ -817,6 +822,7 @@ int main(int argc, char * argv[])
         [&](omniperception::OmniCandidateFrame & frame, const omniperception::OmniCamConfig & cam_cfg, double infer_ms) {
           frame.result.infer_ms = infer_ms;
           decider.armor_filter(frame.result.armors);
+          if (outpost_mode) keep_only_outpost(frame.result.armors);
           decider.set_priority(frame.result.armors);
           auto_aim::apply_armor_target_mask(frame.result.armors, armor_target_mask);
           omniperception::fill_omni_candidate(frame, cam_cfg.spec, gimbal_axis_order);
@@ -979,29 +985,24 @@ int main(int argc, char * argv[])
 
       // Aimer keeps armor-selection debug state; MPC provides all commanded motion.
       tracker_control_ready = tracker_state == "tracking";
-      shooter.update_high_spin_modes(targets);
-      high_spin_center_aim_active = shooter.high_spin_center_aim_active();
       (void)aimer.aim(targets, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
 
       auto_aim::Plan mpc_plan{false};
       auto_aim::SentryMpcSetpoint setpoint;
       std::optional<int> control_armor_id;
-      if (
-        !high_spin_center_aim_active && !targets.empty() && tracker_control_ready &&
-        aimer.debug_aim_point.valid) {
+      if (!targets.empty() && tracker_control_ready && aimer.debug_aim_point.valid) {
         control_armor_id = aimer.debug_aim_point.armor_id;
       }
-      aim_point_ready = high_spin_center_aim_active || control_armor_id.has_value();
+      aim_point_ready = control_armor_id.has_value();
 
       if (targets.empty() || !tracker_control_ready || !aim_point_ready) {
         takeover.clear_target();
       } else {
         const auto & target = targets.front();
-        takeover.begin_target(target.name, target.armor_type, high_spin_center_aim_active);
+        takeover.begin_target(target.name, target.armor_type, false);
 
         const auto sentry_plan = planner.plan_sentry_world(
-          std::optional<auto_aim::Target>{target}, gimbal->bullet_speed(),
-          control_armor_id, high_spin_center_aim_active);
+          std::optional<auto_aim::Target>{target}, gimbal->bullet_speed(), control_armor_id);
         mpc_plan = sentry_plan.world_small_yaw_plan;
         main_mpc_plan = mpc_plan;
         if (safety_gate.plan_is_safe(mpc_plan, gimbal_state.pitch)) {
@@ -1042,14 +1043,13 @@ int main(int argc, char * argv[])
 
       // #####-----开火决策-----#####
       command = setpoint.command;
-      const Eigen::Vector3d motor_ypr{command_gimbal_state.yaw, command_gimbal_state.pitch, 0.0};
-      const bool shooter_ready =
-        shooter.shoot(command, aimer, targets, motor_ypr, tracker_control_ready);
-      const bool high_spin_force_fire = shooter.high_spin_force_fire_active();
-      const bool high_spin_fire_ready = high_spin_force_fire && mpc_plan.control;
-      const bool normal_fire_ready = setpoint.fire_ready && mpc_plan.fire && shooter_ready;
+      const bool fire_allowed =
+        !targets.empty() &&
+        planner.allow_fire(
+          targets.front(), mpc_plan.fire, aimer.debug_aim_point.valid,
+          aimer.debug_aim_point.xyza[3]);
       command.shoot =
-        command.control && tracker_control_ready && (high_spin_fire_ready || normal_fire_ready);
+        command.control && tracker_control_ready && setpoint.fire_ready && fire_allowed;
 
       auto_aim::fill_nav_target_info(command, targets);
 
@@ -1071,15 +1071,6 @@ int main(int argc, char * argv[])
     data["main_tracker_hold"] = main_tracker_hold_applied ? 1 : 0;
     data["main_lost_cmd_hold"] = main_lost_cmd_hold_applied ? 1 : 0;
     data["main_lost_cmd_hold_remaining_ms"] = main_lost_cmd_hold_remaining_ms;
-    data["high_spin_force_fire_active"] =
-      (!buff_mode && !omni_mode && shooter.high_spin_force_fire_active()) ? 1 : 0;
-    data["high_spin_force_fire_enabled"] = shooter.high_spin_force_fire_enabled() ? 1 : 0;
-    data["high_spin_force_fire_enter_speed"] = shooter.high_spin_force_fire_enter_speed();
-    data["high_spin_force_fire_exit_speed"] = shooter.high_spin_force_fire_exit_speed();
-    data["high_spin_center_aim_active"] = high_spin_center_aim_active ? 1 : 0;
-    data["high_spin_center_aim_enabled"] = shooter.high_spin_center_aim_enabled() ? 1 : 0;
-    data["high_spin_center_aim_enter_speed"] = shooter.high_spin_center_aim_enter_speed();
-    data["high_spin_center_aim_exit_speed"] = shooter.high_spin_center_aim_exit_speed();
     data["mpc_setpoint_fire_ready"] =
       main_mpc_setpoint.has_value() && main_mpc_setpoint->fire_ready ? 1 : 0;
     data["gimbal_yaw"] = ypr[0] * 57.3;

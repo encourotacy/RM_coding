@@ -106,10 +106,10 @@ Decider::Decider(const std::string & config_path) : detector_(config_path), coun
   auto yaml = YAML::LoadFile(config_path);
   img_width_ = yaml["image_width"].as<double>();
   img_height_ = yaml["image_height"].as<double>();
-  fov_h_ = yaml["fov_h"].as<double>();
-  fov_v_ = yaml["fov_v"].as<double>();
-  new_fov_h_ = yaml["new_fov_h"].as<double>();
-  new_fov_v_ = yaml["new_fov_v"].as<double>();
+  fov_h_ = yaml["fov_h"] ? yaml["fov_h"].as<double>() : 57.7;
+  fov_v_ = yaml["fov_v"] ? yaml["fov_v"].as<double>() : 56.7;
+  new_fov_h_ = yaml["new_fov_h"] ? yaml["new_fov_h"].as<double>() : 27.0;
+  new_fov_v_ = yaml["new_fov_v"] ? yaml["new_fov_v"].as<double>() : 40.9;
   enemy_color_ =
     (yaml["enemy_color"].as<std::string>() == "red") ? auto_aim::Color::red : auto_aim::Color::blue;
   mode_ = yaml["mode"].as<double>();

@@ -23,10 +23,6 @@ public:
   bool high_spin_force_fire_enabled() const { return high_spin_force_fire_enabled_; }
   double high_spin_force_fire_enter_speed() const { return high_spin_force_fire_enter_speed_; }
   double high_spin_force_fire_exit_speed() const { return high_spin_force_fire_exit_speed_; }
-  bool high_spin_center_aim_active() const { return high_spin_center_aim_active_; }
-  bool high_spin_center_aim_enabled() const { return high_spin_center_aim_enabled_; }
-  double high_spin_center_aim_enter_speed() const { return high_spin_center_aim_enter_speed_; }
-  double high_spin_center_aim_exit_speed() const { return high_spin_center_aim_exit_speed_; }
 
 private:
   io::Command last_command_;
@@ -35,15 +31,11 @@ private:
   double second_tolerance_;
   double high_spin_force_fire_enter_speed_;
   double high_spin_force_fire_exit_speed_;
-  double high_spin_center_aim_enter_speed_;
-  double high_spin_center_aim_exit_speed_;
   double outpost_fire_enter_angle_;
   double outpost_fire_exit_angle_;
   bool auto_fire_;
   bool high_spin_force_fire_enabled_;
   bool high_spin_force_fire_active_;
-  bool high_spin_center_aim_enabled_;
-  bool high_spin_center_aim_active_;
   bool outpost_fire_require_locked_;
   bool has_last_command_;
 };
