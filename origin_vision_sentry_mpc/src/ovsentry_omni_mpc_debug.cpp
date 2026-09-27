@@ -136,12 +136,26 @@ void draw_auto_aim_overlay(
   tools::draw_points(img, aim_image_points, aim_point.valid ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0));
 }
 
-void draw_small_buff_overlay(
-  cv::Mat & img, std::optional<auto_buff::PowerRune> & power_rune,
-  const auto_buff::SmallTarget & target, const auto_buff::Solver & solver,
-  const auto_aim::Plan & plan)
+bool selected_board_is_lit(const auto_buff::PowerRune & rune)
 {
-  tools::draw_text(img, "SMALL_BUFF", {10, 30}, {0, 255, 255}, 0.8, 2);
+  return rune.selectedBoardIndex() >= 0 && rune.isBoardLit(rune.selectedBoardIndex());
+}
+
+const char * energy_name(auto_buff::EnergyType energy_type)
+{
+  return energy_type == auto_buff::EnergyType::SMALL ? "small" : "big";
+}
+
+std::string board_index_string(int index)
+{
+  return index >= 0 ? fmt::format("#{}", index + 1) : "none";
+}
+
+void draw_buff_overlay(
+  cv::Mat & img, std::optional<auto_buff::PowerRune> & power_rune, const auto_buff::Target & target,
+  const auto_buff::Solver & solver, const auto_aim::Plan & plan, bool big_buff)
+{
+  tools::draw_text(img, big_buff ? "BIG_BUFF" : "SMALL_BUFF", {10, 30}, {0, 255, 255}, 0.8, 2);
   tools::draw_text(
     img,
     fmt::format(
@@ -158,6 +172,17 @@ void draw_small_buff_overlay(
   tools::draw_points(img, rune.target().points, {0, 255, 0}, 2);
   tools::draw_point(img, rune.target().center, {0, 0, 255}, 4);
   tools::draw_point(img, rune.r_center, {255, 0, 255}, 4);
+  if (big_buff) {
+    tools::draw_text(
+      img, fmt::format("Selected: {}", board_index_string(rune.selectedBoardIndex())), {10, 90},
+      {0, 255, 0}, 0.8, 2);
+    tools::draw_text(
+      img, fmt::format("Candidate: {}", board_index_string(rune.candidateBoardIndex())), {10, 120},
+      {0, 215, 255}, 0.8, 2);
+    if (selected_board_is_lit(rune)) {
+      cv::circle(img, rune.target().center, 24, cv::Scalar(0, 255, 0), 3);
+    }
+  }
 
   if (target.is_unsolve()) return;
   const auto image_points =
@@ -279,10 +304,39 @@ int main(int argc, char * argv[])
   auto_aim::Shooter shooter(config_path);
   auto_aim::Planner planner(config_path);
   omniperception::Decider decider(config_path);
-  auto_buff::Buff_Detector buff_detector(config_path);
+  auto_buff::Buff_Detector small_buff_detector(config_path, "small_buff_model");
+  auto_buff::Buff_Detector big_buff_detector(config_path, "big_buff_model");
   auto_buff::Solver buff_solver(config_path);
   auto_buff::SmallTarget buff_small_target;
+  auto_buff::BigTarget buff_big_target;
   auto_buff::Aimer buff_aimer(config_path);
+  auto_buff::DoubleBoardController double_board_controller;
+  small_buff_detector.setEnergyType(auto_buff::EnergyType::SMALL);
+  big_buff_detector.setEnergyType(auto_buff::EnergyType::BIG);
+  buff_big_target.setSinusoidalRange(
+    buff_solver.getAMin(), buff_solver.getAMax(), buff_solver.getOmegaMin(),
+    buff_solver.getOmegaMax(), buff_solver.getBBase());
+  {
+    const auto buff_yaml = tools::load(config_path);
+    if (buff_yaml["camera_matrix"]) {
+      const auto camera_matrix = buff_yaml["camera_matrix"].as<std::vector<double>>();
+      if (camera_matrix.size() >= 6) {
+        double_board_controller.setImageCenter(
+          static_cast<float>(camera_matrix[2]), static_cast<float>(camera_matrix[5]));
+      }
+    }
+  }
+  std::optional<io::Command> buff_hold_command;
+  std::optional<auto_buff::EnergyType> active_buff_energy;
+  auto configure_buff = [&](auto_buff::EnergyType energy_type) {
+    if (active_buff_energy.has_value() && active_buff_energy.value() == energy_type) return;
+    active_buff_energy = energy_type;
+    buff_solver.setEnergyType(energy_type);
+    double_board_controller.reset();
+    buff_hold_command.reset();
+    if (energy_type == auto_buff::EnergyType::BIG) buff_big_target.clear_motion_model();
+    tools::logger()->info("[OVSentryOmniMPC] switch buff energy={}", energy_name(energy_type));
+  };
   constexpr bool aimer_to_now = true;
 
   auto yolo_omni_left = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
@@ -304,7 +358,6 @@ int main(int argc, char * argv[])
   std::optional<omniperception::AcceptedOmniTarget> active_omni_timeout_target;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
-  std::optional<io::Command> buff_hold_command;
   std::chrono::steady_clock::time_point buff_last_control_at{};
   bool active_omni_timeout_running = false;
   bool prev_omni_mode = false;
@@ -324,7 +377,12 @@ int main(int argc, char * argv[])
     // recorder.record(main_img,q, main_timestamp);
     solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
-    const bool small_buff_mode = buff_request_subscriber.requested();
+    const auto gimbal_mode = gimbal->mode();
+    const bool request_small_buff = buff_request_subscriber.requested();
+    const bool big_buff_mode = gimbal_mode == io::big_buff;
+    const bool small_buff_mode =
+      !big_buff_mode && (gimbal_mode == io::small_buff || request_small_buff);
+    const bool buff_mode = small_buff_mode || big_buff_mode;
     
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
@@ -334,8 +392,8 @@ int main(int argc, char * argv[])
       armor_ignore_list.enabled, armor_ignore_list.ignored_ids};
     std::list<auto_aim::Armor> armors;
     std::list<auto_aim::Target> targets;
-    std::string tracker_state = small_buff_mode ? "small_buff" : "idle";
-    if (!small_buff_mode) {
+    std::string tracker_state = buff_mode ? (big_buff_mode ? "big_buff" : "small_buff") : "idle";
+    if (!buff_mode) {
       armors = yolo_auto.detect(main_img, frame_count);
       decider.armor_filter(armors);
       decider.set_priority(armors);
@@ -344,7 +402,7 @@ int main(int argc, char * argv[])
       tracker_state = tracker.state();
     }
     auto t1 = std::chrono::steady_clock::now();
-    const bool omni_mode = !small_buff_mode && tracker_state == "lost";
+    const bool omni_mode = !buff_mode && tracker_state == "lost";
 
     std::optional<omniperception::OmniInferenceResult> best_omni_result;
     double best_delta_pitch_deg = 0.0;
@@ -401,24 +459,51 @@ int main(int argc, char * argv[])
       clear_omni_redirect_state();
     }
 
-    if (small_buff_mode) {
+    if (buff_mode) {
       left_img.release();
       right_img.release();
       back_img.release();
       clear_omni_redirect_state();
 
+      const auto energy_type = big_buff_mode ? auto_buff::EnergyType::BIG : auto_buff::EnergyType::SMALL;
+      configure_buff(energy_type);
+      auto & active_buff_detector =
+        big_buff_mode ? big_buff_detector : small_buff_detector;
+
       buff_solver.set_R_gimbal2world(q);
       const auto t_buff0 = std::chrono::steady_clock::now();
-      buff_power_rune = buff_detector.detect(main_img);
+      buff_power_rune = active_buff_detector.detect(main_img);
       const auto t_buff1 = std::chrono::steady_clock::now();
       buff_detect_ms = tools::delta_time(t_buff1, t_buff0) * 1e3;
-      buff_solver.solve(buff_power_rune);
-      buff_small_target.get_target(buff_power_rune, main_timestamp);
-      buff_target_ready = !buff_small_target.is_unsolve();
+      if (big_buff_mode && buff_power_rune.has_value()) {
+        double_board_controller.updateSelection(buff_power_rune.value(), main_timestamp);
+      }
+      const bool should_solve =
+        buff_power_rune.has_value() && (!big_buff_mode || selected_board_is_lit(buff_power_rune.value()));
+      if (should_solve) buff_solver.solve(buff_power_rune);
 
-      auto buff_target_copy = buff_small_target;
-      buff_plan =
-        buff_aimer.mpc_aim(buff_target_copy, main_timestamp, io::to_gimbal_state(gimbal_state), true);
+      if (!big_buff_mode) {
+        buff_small_target.get_target(buff_power_rune, main_timestamp);
+        buff_target_ready = !buff_small_target.is_unsolve();
+        if (buff_target_ready) {
+          auto buff_target_copy = buff_small_target;
+          buff_plan = buff_aimer.mpc_aim(
+            buff_target_copy, main_timestamp, io::to_gimbal_state(gimbal_state), true);
+        }
+      } else {
+        std::optional<auto_buff::PowerRune> tracking_power_rune;
+        if (buff_power_rune.has_value() && selected_board_is_lit(buff_power_rune.value())) {
+          tracking_power_rune = buff_power_rune;
+        }
+        const auto sin_param = buff_solver.getSinusoidalParam();
+        buff_big_target.get_target(tracking_power_rune, main_timestamp, &sin_param);
+        buff_target_ready = !buff_big_target.is_unsolve();
+        if (buff_target_ready) {
+          auto buff_target_copy = buff_big_target;
+          buff_plan = buff_aimer.mpc_aim(
+            buff_target_copy, main_timestamp, io::to_gimbal_state(gimbal_state), true);
+        }
+      }
 
       command.control = buff_plan.control;
       command.shoot = buff_plan.fire;
@@ -692,11 +777,11 @@ int main(int argc, char * argv[])
     }
 
     nlohmann::json data;
-    data["mode"] = small_buff_mode ? 2 : (omni_mode ? 1 : 0);
+    data["mode"] = buff_mode ? 2 : (omni_mode ? 1 : 0);
     data["gimbal_mode"] = io::MODES[static_cast<int>(gimbal->mode())];
     data["armor_num"] = armors.size();
     data["tracker_state"] = tracker_state;
-    data["armor_acquiring"] = (!small_buff_mode && tracker_state == "detecting") ? 1 : 0;
+    data["armor_acquiring"] = (!buff_mode && tracker_state == "detecting") ? 1 : 0;
     data["gimbal_yaw"] = ypr[0] * 57.3;
     data["gimbal_small_yaw"] = gimbal_state.yaw * 57.3;
     data["gimbal_big_yaw"] = gimbal_state.big_yaw * 57.3;
@@ -709,10 +794,11 @@ int main(int argc, char * argv[])
     data["target_vx"] = command.vx;
     data["target_vy"] = command.vy;
     data["horizon_distance"] = command.horizon_distance;
-    data["aim_source"] = (!small_buff_mode && !omni_mode && command.control) ? aimer.debug_aim_point.source : -1;
+    data["aim_source"] = (!buff_mode && !omni_mode && command.control) ? aimer.debug_aim_point.source : -1;
     data["aim_armor_id"] =
-      (!small_buff_mode && !omni_mode && command.control) ? aimer.debug_aim_point.armor_id : -1;
-    if (small_buff_mode) {
+      (!buff_mode && !omni_mode && command.control) ? aimer.debug_aim_point.armor_id : -1;
+    if (buff_mode) {
+      data["buff_energy"] = big_buff_mode ? "big" : "small";
       data["buff_detected"] = buff_power_rune.has_value() ? 1 : 0;
       data["buff_target_ready"] = buff_target_ready ? 1 : 0;
       data["buff_command_held"] = buff_command_held ? 1 : 0;
@@ -726,9 +812,15 @@ int main(int argc, char * argv[])
         data["buff_r_pitch"] = buff_power_rune->ypd_in_world[1] * 57.3;
         data["buff_r_distance"] = buff_power_rune->ypd_in_world[2];
         data["buff_roll"] = buff_power_rune->ypr_in_world[2] * 57.3;
+        data["buff_selected_board"] = buff_power_rune->selectedBoardIndex();
+        data["buff_candidate_board"] = buff_power_rune->candidateBoardIndex();
+        data["buff_activated_arms"] = buff_power_rune->activated_arms;
       }
       if (buff_target_ready) {
-        const auto x = buff_small_target.ekf_x();
+        const auto & buff_target = big_buff_mode
+                                     ? static_cast<const auto_buff::Target &>(buff_big_target)
+                                     : static_cast<const auto_buff::Target &>(buff_small_target);
+        const auto x = buff_target.ekf_x();
         data["buff_target_roll"] = x[5] * 57.3;
         data["buff_target_spd"] = x[6] * 57.3;
       }
@@ -782,8 +874,12 @@ int main(int argc, char * argv[])
     prev_omni_mode = omni_mode;
     if (!display) continue;
 
-    if (small_buff_mode) {
-      draw_small_buff_overlay(main_img, buff_power_rune, buff_small_target, buff_solver, buff_plan);
+    if (buff_mode) {
+      const auto & buff_target = big_buff_mode
+                                   ? static_cast<const auto_buff::Target &>(buff_big_target)
+                                   : static_cast<const auto_buff::Target &>(buff_small_target);
+      draw_buff_overlay(
+        main_img, buff_power_rune, buff_target, buff_solver, buff_plan, big_buff_mode);
     } else {
       draw_auto_aim_overlay(main_img, targets, aimer, solver);
       tools::draw_text(main_img, fmt::format("[{}] mode={}", tracker_state, omni_mode ? "OMNI" : "MPC"),

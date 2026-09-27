@@ -47,8 +47,15 @@ Eigen::VectorXd Target::ekf_x() const { return ekf_.x; }
 SmallTarget::SmallTarget() : Target() {}
 
 void SmallTarget::get_target(
-  const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp)
+  const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp,
+  EnergyType energy_type, const SinusoidalParam * sinusoidal_param)
 {
+  (void)sinusoidal_param;
+  if (energy_type == EnergyType::BIG) {
+    unsolvable_ = true;
+    return;
+  }
+
   // 如果没有识别，退出函数
   static int lost_cn = 0;
   if (!p.has_value()) {
@@ -356,15 +363,40 @@ Eigen::MatrixXd SmallTarget::h_jacobian() const
 
 BigTarget::BigTarget() : Target(), spd_fitter_(100, 0.5, 1.884, 2.000) {}
 
-void BigTarget::get_target(
-  const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp)
+void BigTarget::setSinusoidalRange(
+  double a_min, double a_max, double omega_min, double omega_max, double b_base)
 {
+  a_min_ = a_min;
+  a_max_ = a_max;
+  omega_min_ = omega_min;
+  omega_max_ = omega_max;
+  b_base_ = b_base;
+}
+
+void BigTarget::get_target(
+  const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp,
+  EnergyType energy_type, const SinusoidalParam * sinusoidal_param)
+{
+  if (energy_type == EnergyType::SMALL) {
+    unsolvable_ = true;
+    return;
+  }
+
   // 如果没有识别，退出函数
   static int lost_cn = 0;
   if (!p.has_value()) {
     unsolvable_ = true;
     lost_cn++;
     return;
+  }
+
+  if (sinusoidal_param != nullptr && !param_fixed_) {
+    param_ = *sinusoidal_param;
+    param_fixed_ = true;
+    b_base_ = param_.a + param_.b;
+    tools::logger()->debug(
+      "[BigTarget] 使用Solver正弦参数 a={:.3f} omega={:.3f} b={:.3f}", param_.a, param_.omega,
+      param_.b);
   }
 
   static std::chrono::steady_clock::time_point start_timestamp = timestamp;
@@ -383,6 +415,7 @@ void BigTarget::get_target(
     tools::logger()->debug("[Target] 丢失buff");
     lost_cn = 0;
     first_in_ = true;
+    param_fixed_ = false;
     return;
   }
 
@@ -392,8 +425,8 @@ void BigTarget::get_target(
 
   // 处理发散
   if (
-    ekf_.x[7] > 1.045 * 1.5 || ekf_.x[7] < 0.78 / 1.5 || ekf_.x[8] > 2.0 * 1.5 ||
-    ekf_.x[8] < 1.884 / 1.5) {
+    ekf_.x[7] > a_max_ * 1.5 || ekf_.x[7] < a_min_ / 1.5 || ekf_.x[8] > omega_max_ * 1.5 ||
+    ekf_.x[8] < omega_min_ / 1.5) {
     tools::logger()->debug("[Target] 大符角度发散a: {:.2f}b:{:.2f}", ekf_.x[7], ekf_.x[8]);
     first_in_ = true;
     return;
@@ -450,8 +483,8 @@ void BigTarget::predict(double dt)
     x_prior[2] = tools::limit_rad(x_prior[2]);
     x_prior[4] = tools::limit_rad(x_prior[4]); // yaw
     x_prior[5] = tools::limit_rad(x_prior[5] + voter.clockwise() * 
-    (-a / w * std::cos(w * t + fi) + a / w * std::cos(w * lasttime_ + fi) + (2.09 - a) * dt)); // roll
-    x_prior[6] = a * sin(w * t + fi) + 2.09 - a; // spd
+    (-a / w * std::cos(w * t + fi) + a / w * std::cos(w * lasttime_ + fi) + (b_base_ - a) * dt)); // roll
+    x_prior[6] = a * sin(w * t + fi) + b_base_ - a; // spd
     return x_prior;
   };
   // clang-format on
@@ -484,10 +517,15 @@ void BigTarget::init(double nowtime, const PowerRune & p)
   // [fi]
 
   // clang-format off
+  const double a0 = param_fixed_ ? param_.a : (a_min_ + a_max_) / 2.0;
+  const double w0 = param_fixed_ ? param_.omega : (omega_min_ + omega_max_) / 2.0;
+  const double fi0 = param_fixed_ ? param_.phi : 0.0;
+  const double spd0 = param_fixed_ ? param_.a * std::sin(param_.phi) + param_.b : b_base_ - a0;
+
   // 初始状态
   x0_ << p.ypd_in_world[0], 0.0, p.ypd_in_world[1], p.ypd_in_world[2],
          p.ypr_in_world[0], p.ypr_in_world[2], 
-         1.1775, 0.9125, 1.942, 0.0;//std::atan((spd - 2.09) / 0.9125 + 1
+         spd0, a0, w0, fi0;
   // 初始状态协方差矩阵
   P0_ << 10.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
           0.0, 10.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,

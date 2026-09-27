@@ -14,8 +14,12 @@ Aimer::Aimer(const std::string & config_path)
     gimbal_axis_order_ =
       tools::parse_gimbal_axis_order(yaml["gimbal_axis_order"].as<std::string>());
   }
-  yaw_offset_ = yaml["yaw_offset"].as<double>() / 57.3;      // degree to rad
-  pitch_offset_ = yaml["pitch_offset"].as<double>() / 57.3;  // degree to rad
+  const double yaw_offset_deg =
+    yaml["yaw_offset_buff"] ? yaml["yaw_offset_buff"].as<double>() : yaml["yaw_offset"].as<double>();
+  const double pitch_offset_deg = yaml["pitch_offset_buff"] ? yaml["pitch_offset_buff"].as<double>()
+                                                            : yaml["pitch_offset"].as<double>();
+  yaw_offset_ = yaw_offset_deg / 57.3;
+  pitch_offset_ = pitch_offset_deg / 57.3;
   fire_gap_time_ = yaml["fire_gap_time"].as<double>();
   predict_time_ = yaml["predict_time"].as<double>();
 

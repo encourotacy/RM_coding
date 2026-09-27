@@ -24,6 +24,7 @@ public:
   };
 
   YOLO11_BUFF(const std::string & config);
+  YOLO11_BUFF(const std::string & config, const std::string & model_key);
 
   // 使用NMS，用来获取多个框
   std::vector<Object> get_multicandidateboxes(cv::Mat & image);
@@ -37,6 +38,7 @@ private:
   ov::CompiledModel compiled_model;
   ov::InferRequest infer_request;
   ov::Tensor input_tensor;
+  bool output_layout_logged_ = false;
   const int NUM_POINTS = 6;
 
   // 转换图像数据: 先转换元素类型, (可选)然后归一化到[0, 1], (可选)然后交换RB通道

@@ -34,9 +34,10 @@ class Target
 {
 public:
   Target();
+  virtual ~Target() = default;
   virtual void get_target(
-    const std::optional<PowerRune> & p,
-    std::chrono::steady_clock::time_point & timestamp) = 0;  // 纯虚函数
+    const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp,
+    EnergyType energy_type, const SinusoidalParam * sinusoidal_param) = 0;
 
   virtual void predict(double dt) = 0;  // 纯虚函数
 
@@ -74,7 +75,9 @@ public:
   SmallTarget();
 
   void get_target(
-    const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp) override;
+    const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp,
+    EnergyType energy_type = EnergyType::SMALL,
+    const SinusoidalParam * sinusoidal_param = nullptr) override;
 
   void predict(double dt) override;
 
@@ -97,9 +100,14 @@ public:
   BigTarget();
 
   void get_target(
-    const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp) override;
+    const std::optional<PowerRune> & p, std::chrono::steady_clock::time_point & timestamp,
+    EnergyType energy_type = EnergyType::BIG,
+    const SinusoidalParam * sinusoidal_param = nullptr) override;
 
   void predict(double dt) override;
+
+  void setSinusoidalRange(
+    double a_min, double a_max, double omega_min, double omega_max, double b_base);
 
 private:
   void init(double nowtime, const PowerRune & p) override;
@@ -110,7 +118,14 @@ private:
 
   tools::RansacSineFitter spd_fitter_;
 
-  double fit_spd_;
+  double fit_spd_ = 0.0;
+  SinusoidalParam param_;
+  bool param_fixed_ = false;
+  double a_min_ = 0.78;
+  double a_max_ = 1.045;
+  double omega_min_ = 1.884;
+  double omega_max_ = 2.0;
+  double b_base_ = 2.090;
 };
 
 }  // namespace auto_buff

@@ -41,7 +41,40 @@ Solver::Solver(const std::string & config_path) : R_gimbal2world_(Eigen::Matrix3
   cv::eigen2cv(camera_matrix, camera_matrix_);
   cv::eigen2cv(distort_coeffs, distort_coeffs_);
 
-  // compute_rotated_points(OBJECT_POINTS);
+  load_big_energy(yaml);
+}
+
+void Solver::load_big_energy(const YAML::Node & config)
+{
+  const YAML::Node big_energy = config["big_energy"];
+  if (!big_energy) return;
+  a_min_ = big_energy["a_min"].as<double>(a_min_);
+  a_max_ = big_energy["a_max"].as<double>(a_max_);
+  omega_min_ = big_energy["omega_min"].as<double>(omega_min_);
+  omega_max_ = big_energy["omega_max"].as<double>(omega_max_);
+  b_base_ = big_energy["b_base"].as<double>(b_base_);
+}
+
+void Solver::generate_random_param()
+{
+  std::uniform_real_distribution<double> a_dist(a_min_, a_max_);
+  std::uniform_real_distribution<double> omega_dist(omega_min_, omega_max_);
+  sinusoidal_param_.a = a_dist(gen_);
+  sinusoidal_param_.omega = omega_dist(gen_);
+  sinusoidal_param_.b = b_base_ - sinusoidal_param_.a;
+  sinusoidal_param_.phi = 0.0;
+  param_fixed_ = true;
+}
+
+void Solver::setEnergyType(EnergyType type)
+{
+  if (energy_type_ == type) return;
+  energy_type_ = type;
+  if (type == EnergyType::BIG && !param_fixed_) {
+    generate_random_param();
+  } else if (type == EnergyType::SMALL) {
+    param_fixed_ = false;
+  }
 }
 
 Eigen::Matrix3d Solver::R_gimbal2world() const { return R_gimbal2world_; }

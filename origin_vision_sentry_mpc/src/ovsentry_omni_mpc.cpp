@@ -36,6 +36,19 @@
 #include "tools/yaml.hpp"
 #include "tools/recorder.hpp"
 
+namespace
+{
+bool selected_board_is_lit(const auto_buff::PowerRune & rune)
+{
+  return rune.selectedBoardIndex() >= 0 && rune.isBoardLit(rune.selectedBoardIndex());
+}
+
+const char * energy_name(auto_buff::EnergyType energy_type)
+{
+  return energy_type == auto_buff::EnergyType::SMALL ? "small" : "big";
+}
+}  // namespace
+
 const std::string keys =
   "{help h usage ? |                         | 输出命令行参数说明}"
   "{@config-path   | configs/sentry.yaml    | 位置参数，yaml配置文件路径 }"
@@ -138,10 +151,39 @@ int main(int argc, char * argv[])
   auto_aim::Shooter shooter(config_path);
   auto_aim::Planner planner(config_path);
   omniperception::Decider decider(config_path);
-  auto_buff::Buff_Detector buff_detector(config_path);
+  auto_buff::Buff_Detector small_buff_detector(config_path, "small_buff_model");
+  auto_buff::Buff_Detector big_buff_detector(config_path, "big_buff_model");
   auto_buff::Solver buff_solver(config_path);
   auto_buff::SmallTarget buff_small_target;
+  auto_buff::BigTarget buff_big_target;
   auto_buff::Aimer buff_aimer(config_path);
+  auto_buff::DoubleBoardController double_board_controller;
+  small_buff_detector.setEnergyType(auto_buff::EnergyType::SMALL);
+  big_buff_detector.setEnergyType(auto_buff::EnergyType::BIG);
+  buff_big_target.setSinusoidalRange(
+    buff_solver.getAMin(), buff_solver.getAMax(), buff_solver.getOmegaMin(),
+    buff_solver.getOmegaMax(), buff_solver.getBBase());
+  {
+    const auto buff_yaml = tools::load(config_path);
+    if (buff_yaml["camera_matrix"]) {
+      const auto camera_matrix = buff_yaml["camera_matrix"].as<std::vector<double>>();
+      if (camera_matrix.size() >= 6) {
+        double_board_controller.setImageCenter(
+          static_cast<float>(camera_matrix[2]), static_cast<float>(camera_matrix[5]));
+      }
+    }
+  }
+  std::optional<io::Command> buff_hold_command;
+  std::optional<auto_buff::EnergyType> active_buff_energy;
+  auto configure_buff = [&](auto_buff::EnergyType energy_type) {
+    if (active_buff_energy.has_value() && active_buff_energy.value() == energy_type) return;
+    active_buff_energy = energy_type;
+    buff_solver.setEnergyType(energy_type);
+    double_board_controller.reset();
+    buff_hold_command.reset();
+    if (energy_type == auto_buff::EnergyType::BIG) buff_big_target.clear_motion_model();
+    tools::logger()->info("[OVSentryOmniMPC] switch buff energy={}", energy_name(energy_type));
+  };
   constexpr bool aimer_to_now = true;
 
   auto yolo_omni_left = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
@@ -163,7 +205,6 @@ int main(int argc, char * argv[])
   std::optional<omniperception::AcceptedOmniTarget> active_omni_timeout_target;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
-  std::optional<io::Command> buff_hold_command;
   std::chrono::steady_clock::time_point buff_last_control_at{};
   bool active_omni_timeout_running = false;
   bool prev_omni_mode = false;
@@ -183,7 +224,12 @@ int main(int argc, char * argv[])
     // recorder.record(main_img,q, main_timestamp);
     solver.set_R_gimbal2world(q);
     const auto gimbal_state = gimbal->state();
-    const bool small_buff_mode = buff_request_subscriber.requested();
+    const auto gimbal_mode = gimbal->mode();
+    const bool request_small_buff = buff_request_subscriber.requested();
+    const bool big_buff_mode = gimbal_mode == io::big_buff;
+    const bool small_buff_mode =
+      !big_buff_mode && (gimbal_mode == io::small_buff || request_small_buff);
+    const bool buff_mode = small_buff_mode || big_buff_mode;
     
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
@@ -192,8 +238,8 @@ int main(int argc, char * argv[])
       armor_ignore_list.enabled, armor_ignore_list.ignored_ids};
     std::list<auto_aim::Armor> armors;
     std::list<auto_aim::Target> targets;
-    std::string tracker_state = small_buff_mode ? "small_buff" : "idle";
-    if (!small_buff_mode) {
+    std::string tracker_state = buff_mode ? (big_buff_mode ? "big_buff" : "small_buff") : "idle";
+    if (!buff_mode) {
       armors = yolo_auto.detect(main_img, frame_count);
       decider.armor_filter(armors);
       decider.set_priority(armors);
@@ -201,7 +247,7 @@ int main(int argc, char * argv[])
       targets = tracker.track(armors, main_timestamp);
       tracker_state = tracker.state();
     }
-    const bool omni_mode = !small_buff_mode && tracker_state == "lost";
+    const bool omni_mode = !buff_mode && tracker_state == "lost";
 
     std::optional<double> omni_target_error_deg;
     bool omni_retarget_cd_active = false;
@@ -238,20 +284,46 @@ int main(int argc, char * argv[])
       clear_omni_redirect_state();
     }
 
-    if (small_buff_mode) {
+    if (buff_mode) {
       left_img.release();
       right_img.release();
       back_img.release();
       clear_omni_redirect_state();
 
-      buff_solver.set_R_gimbal2world(q);
-      buff_power_rune = buff_detector.detect(main_img);
-      buff_solver.solve(buff_power_rune);
-      buff_small_target.get_target(buff_power_rune, main_timestamp);
+      const auto energy_type = big_buff_mode ? auto_buff::EnergyType::BIG : auto_buff::EnergyType::SMALL;
+      configure_buff(energy_type);
+      auto & active_buff_detector =
+        big_buff_mode ? big_buff_detector : small_buff_detector;
 
-      auto buff_target_copy = buff_small_target;
-      buff_plan =
-        buff_aimer.mpc_aim(buff_target_copy, main_timestamp, io::to_gimbal_state(gimbal_state), true);
+      buff_solver.set_R_gimbal2world(q);
+      buff_power_rune = active_buff_detector.detect(main_img);
+      if (big_buff_mode && buff_power_rune.has_value()) {
+        double_board_controller.updateSelection(buff_power_rune.value(), main_timestamp);
+      }
+      const bool should_solve =
+        buff_power_rune.has_value() && (!big_buff_mode || selected_board_is_lit(buff_power_rune.value()));
+      if (should_solve) buff_solver.solve(buff_power_rune);
+
+      if (!big_buff_mode) {
+        buff_small_target.get_target(buff_power_rune, main_timestamp);
+        if (!buff_small_target.is_unsolve()) {
+          auto buff_target_copy = buff_small_target;
+          buff_plan = buff_aimer.mpc_aim(
+            buff_target_copy, main_timestamp, io::to_gimbal_state(gimbal_state), true);
+        }
+      } else {
+        std::optional<auto_buff::PowerRune> tracking_power_rune;
+        if (buff_power_rune.has_value() && selected_board_is_lit(buff_power_rune.value())) {
+          tracking_power_rune = buff_power_rune;
+        }
+        const auto sin_param = buff_solver.getSinusoidalParam();
+        buff_big_target.get_target(tracking_power_rune, main_timestamp, &sin_param);
+        if (!buff_big_target.is_unsolve()) {
+          auto buff_target_copy = buff_big_target;
+          buff_plan = buff_aimer.mpc_aim(
+            buff_target_copy, main_timestamp, io::to_gimbal_state(gimbal_state), true);
+        }
+      }
 
       command.control = buff_plan.control;
       command.shoot = buff_plan.fire;

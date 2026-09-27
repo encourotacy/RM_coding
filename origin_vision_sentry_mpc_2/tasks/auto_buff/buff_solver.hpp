@@ -6,6 +6,7 @@
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
 #include <opencv2/core/eigen.hpp>
 #include <optional>
+#include <random>
 
 #include "buff_type.hpp"
 #include "tools/math_tools.hpp"
@@ -25,6 +26,14 @@ public:
 
   void solve(std::optional<PowerRune> & ps) const;
 
+  void setEnergyType(EnergyType type);
+  const SinusoidalParam & getSinusoidalParam() const { return sinusoidal_param_; }
+  double getAMin() const { return a_min_; }
+  double getAMax() const { return a_max_; }
+  double getOmegaMin() const { return omega_min_; }
+  double getOmegaMax() const { return omega_max_; }
+  double getBBase() const { return b_base_; }
+
   // 调试用
   cv::Point2f point_buff2pixel(cv::Point3f x);
 
@@ -40,6 +49,19 @@ private:
   Eigen::Matrix3d R_gimbal2world_;
 
   cv::Vec3d rvec_, tvec_;
+
+  EnergyType energy_type_ = EnergyType::SMALL;
+  SinusoidalParam sinusoidal_param_;
+  bool param_fixed_ = false;
+  double a_min_ = 0.780;
+  double a_max_ = 1.045;
+  double omega_min_ = 1.884;
+  double omega_max_ = 2.000;
+  double b_base_ = 2.090;
+  std::mt19937 gen_{std::random_device{}()};
+
+  void load_big_energy(const YAML::Node & config);
+  void generate_random_param();
 
   // std::vector<std::vector<cv::Point3f>> OBJECT_POINTS = {
   //   {cv::Point3f(0, 160e-3, 858.5e-3), cv::Point3f(0, -160e-3, 858.5e-3),

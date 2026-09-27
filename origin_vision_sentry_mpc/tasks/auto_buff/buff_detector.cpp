@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "tools/logger.hpp"
 
@@ -58,6 +59,72 @@ Buff_Detector::Buff_Detector(const std::string & config, const std::string & mod
     small_assoc_reacquire_frames_ =
       std::max(1, yaml["small_assoc_reacquire_frames"].as<int>());
   if (yaml["lose_max"]) lose_max_ = yaml["lose_max"].as<int>();
+}
+
+void Buff_Detector::setEnergyType(EnergyType type) { energy_type_ = type; }
+
+void Buff_Detector::fill_board_metadata(
+  PowerRune & rune, const std::vector<YOLO11_BUFF::Object> & results) const
+{
+  rune.board_confidences.assign(rune.fanblades.size(), 0.0);
+  rune.board_tracked_frames.assign(rune.fanblades.size(), 1);
+  rune.board_areas.assign(rune.fanblades.size(), 0.0);
+  std::vector<bool> used(results.size(), false);
+  for (size_t board_index = 0; board_index < rune.fanblades.size(); ++board_index) {
+    float best_distance = std::numeric_limits<float>::max();
+    int best_result = -1;
+    for (size_t result_index = 0; result_index < results.size(); ++result_index) {
+      if (used[result_index] || results[result_index].kpt.size() < 5) continue;
+      const float distance =
+        cv::norm(rune.fanblades[board_index].center - results[result_index].kpt[4]);
+      if (distance < best_distance) {
+        best_distance = distance;
+        best_result = static_cast<int>(result_index);
+      }
+    }
+    if (best_result < 0) continue;
+    used[best_result] = true;
+    rune.board_confidences[board_index] = results[best_result].prob;
+    const auto & rect = results[best_result].rect;
+    rune.board_areas[board_index] = static_cast<double>(rect.width) * rect.height;
+  }
+}
+
+std::optional<PowerRune> Buff_Detector::detect_big(cv::Mat & bgr_img)
+{
+  std::vector<YOLO11_BUFF::Object> results = MODE_.get_multicandidateboxes(bgr_img);
+  if (results.empty()) {
+    handle_lose();
+    return std::nullopt;
+  }
+
+  std::vector<FanBlade> fanblades;
+  for (const auto & result : results) {
+    if (result.kpt.size() < 5) continue;
+    fanblades.emplace_back(FanBlade(result.kpt, result.kpt[4], _light));
+  }
+  if (fanblades.empty()) {
+    handle_lose();
+    return std::nullopt;
+  }
+
+  auto r_center = get_r_center(fanblades, bgr_img);
+  PowerRune powerrune(fanblades, r_center, last_powerrune_, EnergyType::BIG);
+  if (powerrune.is_unsolve()) {
+    handle_lose();
+    return std::nullopt;
+  }
+
+  fill_board_metadata(powerrune, results);
+  powerrune.energy_type = EnergyType::BIG;
+  powerrune.activated_arms = static_cast<int>(powerrune.getLitBoardIndices().size());
+
+  status_ = TRACK;
+  lose_ = 0;
+  std::optional<PowerRune> power_rune;
+  power_rune.emplace(powerrune);
+  last_powerrune_ = power_rune;
+  return power_rune;
 }
 
 void Buff_Detector::handle_img(const cv::Mat & bgr_img, cv::Mat & dilated_img)
@@ -253,6 +320,7 @@ std::optional<PowerRune> Buff_Detector::detect_24(cv::Mat & bgr_img)
 
 std::optional<PowerRune> Buff_Detector::detect(cv::Mat & bgr_img)
 {
+  if (energy_type_ == EnergyType::BIG) return detect_big(bgr_img);
   auto power_runes = detect(bgr_img, SMALL);
   if (power_runes.empty()) return std::nullopt;
   return power_runes.front();

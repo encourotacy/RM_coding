@@ -117,6 +117,21 @@ const char * buff_mode_name(io::Mode mode)
   return "none";
 }
 
+const char * energy_name(auto_buff::EnergyType energy_type)
+{
+  return energy_type == auto_buff::EnergyType::SMALL ? "small" : "big";
+}
+
+std::string board_index_string(int index)
+{
+  return index >= 0 ? fmt::format("#{}", index + 1) : "none";
+}
+
+bool selected_board_is_lit(const auto_buff::PowerRune & rune)
+{
+  return rune.selectedBoardIndex() >= 0 && rune.isBoardLit(rune.selectedBoardIndex());
+}
+
 void apply_world_direction_target(
   io::Command & command, const Eigen::Vector3d & world_direction, double big_yaw_rad,
   double current_small_yaw_rad, tools::GimbalAxisOrder gimbal_axis_order)
@@ -170,11 +185,11 @@ void draw_auto_aim_overlay(
   const std::list<auto_aim::Target> & targets, const auto_aim::Aimer & aimer,
   const auto_aim::Solver & solver)
 {
-  const cv::Scalar kDetectionColor{0, 255, 255};  // yellow
+  const cv::Scalar kDetectionColor{0, 255, 255};       // yellow
   const cv::Scalar kOutpostDetectionColor{0, 255, 0};  // green
-  const cv::Scalar kTrackerColor{0, 255, 0};      // green
-  const cv::Scalar kOutpostTrackerColor{0, 0, 255};  // red
-  const cv::Scalar kAimColor{0, 0, 255};          // red
+  const cv::Scalar kTrackerColor{0, 255, 0};           // green
+  const cv::Scalar kOutpostTrackerColor{0, 0, 255};    // red
+  const cv::Scalar kAimColor{0, 0, 255};               // red
 
   int detection_index = 0;
   for (const auto & armor : armors) {
@@ -269,6 +284,7 @@ bool same_candidate_frame(
 
 int main(int argc, char * argv[])
 {
+  // #####-----命令行参数-----#####
   cv::CommandLineParser cli(argc, argv, keys);
   auto config_path = cli.get<std::string>(0);
   if (cli.has("help") || config_path.empty()) {
@@ -276,6 +292,7 @@ int main(int argc, char * argv[])
     return 0;
   }
 
+  // #####-----配置读取-----#####
   auto yaml = tools::load(config_path);
   auto read_infer_device = [&](const std::string & key) {
     if (yaml[key]) return yaml[key].as<std::string>();
@@ -317,26 +334,11 @@ int main(int argc, char * argv[])
     return std::isfinite(value) && accept(value) ? value : fallback;
   };
 
+  // #####-----云台与MPC参数-----#####
   const tools::GimbalAxisOrder gimbal_axis_order =
     yaml["gimbal_axis_order"]
       ? tools::parse_gimbal_axis_order(yaml["gimbal_axis_order"].as<std::string>())
       : tools::GimbalAxisOrder::yaw_pitch;
-  const std::string auto_aim_device = read_infer_device("auto_aim_device");
-  const std::string omni_device = read_infer_device("omni_device");
-  const double omni_retarget_cooldown_s = read_or("omni_retarget_cooldown_s", 2.5);
-  const double omni_hold_release_tolerance_deg = read_or("omni_hold_release_tolerance_deg", 3.0);
-  const double omni_retarget_min_delta_deg = read_or("omni_retarget_min_delta_deg", 20.0);
-  const double omni_command_timeout_s = read_or("omni_command_timeout_s", 0.5);
-  const double main_lost_cmd_hold_s = read_non_negative("main_lost_cmd_hold_s", 0.25);
-  const auto omni_read_timeout =
-    std::chrono::milliseconds(std::max(1, read_or_int("omni_camera_read_timeout_ms", 10)));
-  const auto omni_retarget_cooldown = seconds(omni_retarget_cooldown_s);
-  const auto omni_command_timeout = seconds(omni_command_timeout_s);
-  const auto main_lost_cmd_hold_duration = seconds(main_lost_cmd_hold_s);
-  const std::string auto_aim_ignore_topic =
-    read_or_string("auto_aim_ignore_topic", "/request_auto_aim_ignore");
-  const std::string auto_aim_ignore_msg_type =
-    read_or_string("auto_aim_ignore_msg_type", "rm_interfaces/msg/RequestAutoAimIgnore");
   const double takeover_time_s = read_or("mpc_takeover_time_s", 0.20);
   const double status_timeout_s = read_if_finite(
     "mpc_gimbal_status_timeout_s", 0.20, [](double value) { return value >= 0.0; });
@@ -349,6 +351,25 @@ int main(int argc, char * argv[])
   safety_limits.max_pitch = read_or("mpc_pitch_max_deg", 30.0) / 57.3;
   const auto status_timeout = seconds(status_timeout_s);
 
+  // #####-----自瞄参数-----#####
+  const std::string auto_aim_device = read_infer_device("auto_aim_device");
+  const std::string auto_aim_ignore_topic =
+    read_or_string("auto_aim_ignore_topic", "/request_auto_aim_ignore");
+  const std::string auto_aim_ignore_msg_type =
+    read_or_string("auto_aim_ignore_msg_type", "rm_interfaces/msg/RequestAutoAimIgnore");
+
+  // #####-----全向参数-----#####
+  const std::string omni_device = read_infer_device("omni_device");
+  const double omni_retarget_cooldown_s = read_or("omni_retarget_cooldown_s", 2.5);
+  const double omni_hold_release_tolerance_deg = read_or("omni_hold_release_tolerance_deg", 3.0);
+  const double omni_retarget_min_delta_deg = read_or("omni_retarget_min_delta_deg", 20.0);
+  const double omni_command_timeout_s = read_or("omni_command_timeout_s", 0.5);
+  const double main_lost_cmd_hold_s = read_non_negative("main_lost_cmd_hold_s", 0.25);
+  const auto omni_read_timeout =
+    std::chrono::milliseconds(std::max(1, read_or_int("omni_camera_read_timeout_ms", 10)));
+  const auto omni_retarget_cooldown = seconds(omni_retarget_cooldown_s);
+  const auto omni_command_timeout = seconds(omni_command_timeout_s);
+  const auto main_lost_cmd_hold_duration = seconds(main_lost_cmd_hold_s);
   const double omni_fov_h_deg = read_cli_or_yaml_double("fov_h", "omni_fov_h_deg", 120.0);
   const double omni_fov_v_deg = read_cli_or_yaml_double("fov_v", "omni_fov_v_deg", 67.0);
   const auto make_omni_cam =
@@ -371,23 +392,23 @@ int main(int argc, char * argv[])
     omniperception::OmniCameraSlot::back, "back", "back", "omni_back_path", "video4", "back_yaw",
     "omni_back_yaw_deg", 180.0);
 
-  tools::logger()->info(
-    "[OVSentryOmniMPC] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
-  tools::logger()->info(
-    "[OVSentryOmniMPC] omni center yaw(deg): left={:.1f} right={:.1f} back={:.1f}",
-    left_cam_cfg.spec.center_yaw_deg, right_cam_cfg.spec.center_yaw_deg,
-    back_cam_cfg.spec.center_yaw_deg);
-
+  // #####-----调试工具-----#####
   tools::Exiter exiter;
   tools::Plotter plotter;
   tools::Recorder recorder(30);
   const bool display = !cli.has("no-display");
   constexpr bool yolo_debug = false;
 
+  // #####-----云台与主相机-----#####
   auto gimbal = std::make_unique<io::ROS2Gimbal>(config_path);
   io::ArmorIgnoreSubscriber armor_ignore_subscriber(auto_aim_ignore_topic, auto_aim_ignore_msg_type);
   auto auto_aim_camera = std::make_unique<io::Camera>(config_path);
+  tools::logger()->info(
+    "[OVSentryOmniMPC] world-frame dual-yaw MPC enabled; takeover={:.0f}ms, "
+    "pitch_limit=[{:.1f},{:.1f}]deg",
+    takeover_time_s * 1e3, safety_limits.min_pitch * 57.3, safety_limits.max_pitch * 57.3);
 
+  // #####-----自瞄模块-----#####
   auto_aim::YOLO yolo_auto(config_path, yolo_debug, "auto_aim_device");
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
@@ -396,22 +417,47 @@ int main(int argc, char * argv[])
   auto_aim::Planner planner(config_path);
   auto_aim::SentryMpcTakeover takeover(takeover_time_s, max_yaw_acc, max_pitch_acc);
   auto_aim::SentryMpcSafetyGate safety_gate(safety_limits);
-  omniperception::Decider decider(config_path);
   constexpr bool aimer_to_now = true;
 
-  auto_buff::Buff_Detector buff_detector(config_path);
+  // #####-----打符模块-----#####
+  auto_buff::Buff_Detector small_buff_detector(config_path, "small_buff_model");
+  auto_buff::Buff_Detector big_buff_detector(config_path, "big_buff_model");
   auto_buff::Solver buff_solver(config_path);
-  auto_buff::SmallTarget buff_small_target;
-  auto_buff::BigTarget buff_big_target;
+  auto buff_small_target = std::make_shared<auto_buff::SmallTarget>();
+  auto buff_big_target = std::make_shared<auto_buff::BigTarget>();
   auto_buff::Aimer buff_aimer(config_path);
+  auto_buff::DoubleBoardController double_board_controller;
+  small_buff_detector.setEnergyType(auto_buff::EnergyType::SMALL);
+  small_buff_detector.setTarget(buff_small_target);
+  big_buff_detector.setEnergyType(auto_buff::EnergyType::BIG);
+  big_buff_detector.setTarget(buff_big_target);
+  {
+    const auto buff_yaml = tools::load(config_path);
+    if (buff_yaml["camera_matrix"]) {
+      const auto camera_matrix = buff_yaml["camera_matrix"].as<std::vector<double>>();
+      if (camera_matrix.size() >= 6) {
+        double_board_controller.setImageCenter(
+          static_cast<float>(camera_matrix[2]), static_cast<float>(camera_matrix[5]));
+      }
+    }
+  }
+  std::optional<auto_buff::EnergyType> active_buff_energy;
+  auto configure_buff = [&](auto_buff::EnergyType energy_type) {
+    if (active_buff_energy.has_value() && active_buff_energy.value() == energy_type) return;
+    active_buff_energy = energy_type;
+    buff_solver.setEnergyType(energy_type);
+    double_board_controller.reset();
+    tools::logger()->info("[OVSentryOmniMPC] switch buff energy={}", energy_name(energy_type));
+  };
 
+  // #####-----全向相机与检测-----#####
+  omniperception::Decider decider(config_path);
   auto yolo_omni_left = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
   auto yolo_omni_right = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
   std::unique_ptr<auto_aim::YOLO> yolo_omni_back;
   if (!back_cam_cfg.dev_name.empty()) {
     yolo_omni_back = std::make_unique<auto_aim::YOLO>(config_path, yolo_debug, "omni_device");
   }
-
   io::USBCamera cam_left(left_cam_cfg.dev_name, config_path);
   io::USBCamera cam_right(right_cam_cfg.dev_name, config_path);
   std::unique_ptr<io::USBCamera> cam_back;
@@ -421,29 +467,28 @@ int main(int argc, char * argv[])
   cam_left.device_name = left_cam_cfg.spec.label;
   cam_right.device_name = right_cam_cfg.spec.label;
   if (cam_back) cam_back->device_name = back_cam_cfg.spec.label;
+  tools::logger()->info(
+    "[OVSentryOmniMPC] inference devices: auto_aim={} omni={}", auto_aim_device, omni_device);
+  tools::logger()->info(
+    "[OVSentryOmniMPC] omni center yaw(deg): left={:.1f} right={:.1f} back={:.1f}",
+    left_cam_cfg.spec.center_yaw_deg, right_cam_cfg.spec.center_yaw_deg,
+    back_cam_cfg.spec.center_yaw_deg);
 
+  // #####-----图像缓冲-----#####
   cv::Mat main_img, left_img, right_img, back_img;
   std::chrono::steady_clock::time_point main_timestamp, ts_left, ts_right, ts_back;
+  int frame_count = 0;
+  bool status_warning_active = false;
+
+  // #####-----全向会话状态-----#####
   std::optional<io::Command> omni_hold_command;
   std::optional<omniperception::AcceptedOmniTarget> session_accepted_omni_target;
   std::optional<omniperception::AcceptedOmniTarget> cooldown_anchor_omni_target;
   std::optional<omniperception::AcceptedOmniTarget> active_omni_timeout_target;
-  std::optional<auto_aim::SentryMpcSetpoint> main_lost_hold_setpoint;
   std::chrono::steady_clock::time_point omni_retarget_cooldown_deadline{};
   std::chrono::steady_clock::time_point active_omni_timeout_started_at{};
-  std::chrono::steady_clock::time_point main_lost_cmd_hold_deadline{};
   bool active_omni_timeout_running = false;
-  bool main_lost_cmd_hold_running = false;
-  bool main_camera_tracker_active = false;
   bool prev_omni_mode = false;
-  bool status_warning_active = false;
-  int frame_count = 0;
-
-  tools::logger()->info(
-    "[OVSentryOmniMPC] world-frame dual-yaw MPC enabled; takeover={:.0f}ms, "
-    "pitch_limit=[{:.1f},{:.1f}]deg",
-    takeover_time_s * 1e3, safety_limits.min_pitch * 57.3, safety_limits.max_pitch * 57.3);
-
   const auto clear_omni_timeout_session = [&]() {
     active_omni_timeout_target.reset();
     active_omni_timeout_started_at = std::chrono::steady_clock::time_point{};
@@ -456,6 +501,12 @@ int main(int argc, char * argv[])
     omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
     clear_omni_timeout_session();
   };
+
+  // #####-----主相机丢失保持-----#####
+  std::optional<auto_aim::SentryMpcSetpoint> main_lost_hold_setpoint;
+  std::chrono::steady_clock::time_point main_lost_cmd_hold_deadline{};
+  bool main_lost_cmd_hold_running = false;
+  bool main_camera_tracker_active = false;
   const auto clear_main_lost_cmd_hold = [&]() {
     main_lost_hold_setpoint.reset();
     main_lost_cmd_hold_deadline = std::chrono::steady_clock::time_point{};
@@ -471,6 +522,7 @@ int main(int argc, char * argv[])
   };
 
   while (!exiter.exit()) {
+    // #####-----主相机读帧-----#####
     try {
       auto_aim_camera->read(main_img, main_timestamp);
       if (main_img.empty()) {
@@ -492,6 +544,7 @@ int main(int argc, char * argv[])
       continue;
     }
 
+    // #####-----云台状态超时-----#####
     frame_count++;
     bool gimbal_status_fresh = gimbal->status_is_fresh(status_timeout);
     if (!gimbal_status_fresh) {
@@ -512,9 +565,10 @@ int main(int argc, char * argv[])
       status_warning_active = false;
     }
 
+    // #####-----云台姿态校验-----#####
     const auto q_at_image = gimbal->try_imu_at_image(main_timestamp, status_timeout);
     const auto initial_gimbal_state = gimbal->state();
-    recorder.record(main_img, q_at_image.value_or(Eigen::Quaterniond::Identity()), main_timestamp);
+    //recorder.record(main_img, q_at_image.value_or(Eigen::Quaterniond::Identity()), main_timestamp);
     if (
       !q_at_image.has_value() || !q_at_image->coeffs().allFinite() || q_at_image->norm() < 1e-6 ||
       !gimbal_state_is_finite(initial_gimbal_state)) {
@@ -527,6 +581,7 @@ int main(int argc, char * argv[])
       continue;
     }
 
+    // #####-----主相机检测与跟踪-----#####
     const Eigen::Quaterniond q = q_at_image->normalized();
     solver.set_R_gimbal2world(q);
     buff_solver.set_R_gimbal2world(q);
@@ -557,6 +612,7 @@ int main(int argc, char * argv[])
       if (tracker_state != "lost") main_camera_tracker_active = true;
     }
 
+    // #####-----检测后状态复核-----#####
     gimbal_status_fresh = gimbal->status_is_fresh(status_timeout);
     gimbal_state = gimbal->state();
     if (!gimbal_status_fresh || !gimbal_state_is_finite(gimbal_state)) {
@@ -571,6 +627,11 @@ int main(int argc, char * argv[])
       continue;
     }
 
+    // #####-----本帧共用控制量-----#####
+    const auto now = std::chrono::steady_clock::now();
+    io::Command command{false, false, 0.0, 0.0};
+
+    // #####-----全向本帧状态-----#####
     std::optional<omniperception::OmniInferenceResult> best_omni_result;
     std::optional<double> omni_target_abs_yaw_deg;
     std::optional<double> omni_candidate_abs_yaw_deg;
@@ -588,25 +649,28 @@ int main(int argc, char * argv[])
     bool omni_target_reached = false;
     bool omni_cmd_timeout_active = false;
     bool omni_cmd_timed_out = false;
-    bool main_tracker_hold_applied = false;
-    bool main_lost_cmd_hold_applied = false;
     std::string omni_block_reason = "none";
     double omni_cmd_elapsed_ms = 0.0;
     double omni_retarget_remaining_ms = 0.0;
+
+    // #####-----主相机本帧状态-----#####
+    bool main_tracker_hold_applied = false;
+    bool main_lost_cmd_hold_applied = false;
     double main_lost_cmd_hold_remaining_ms = 0.0;
-    const auto now = std::chrono::steady_clock::now();
-    io::Command command{false, false, 0.0, 0.0};
     std::optional<auto_aim::Plan> main_mpc_plan;
     std::optional<auto_aim::SentryMpcSetpoint> main_mpc_setpoint;
     bool tracker_control_ready = false;
     bool aim_point_ready = false;
     bool high_spin_center_aim_active = false;
+
+    // #####-----打符本帧状态-----#####
     std::optional<auto_buff::PowerRune> buff_power_runes;
     bool buff_target_solved = false;
     double buff_detect_time_ms = 0.0;
     double buff_solve_time_ms = 0.0;
     double buff_aim_time_ms = 0.0;
 
+    // #####-----全向模式切换-----#####
     if (cooldown_anchor_omni_target.has_value() && now >= omni_retarget_cooldown_deadline) {
       cooldown_anchor_omni_target.reset();
       omni_retarget_cooldown_deadline = std::chrono::steady_clock::time_point{};
@@ -629,6 +693,7 @@ int main(int argc, char * argv[])
     }
 
     if (buff_mode) {
+      // #####-----打符控制-----#####
       takeover.clear_target();
       clear_main_lost_cmd_hold();
       main_camera_tracker_active = false;
@@ -637,28 +702,51 @@ int main(int argc, char * argv[])
       back_img.release();
       clear_omni_redirect_state();
 
+      const auto energy_type = gimbal_mode == io::small_buff ? auto_buff::EnergyType::SMALL
+                                                               : auto_buff::EnergyType::BIG;
+      configure_buff(energy_type);
+      auto & active_buff_detector = energy_type == auto_buff::EnergyType::SMALL ? small_buff_detector
+                                                                                : big_buff_detector;
+
       const auto buff_detect_start = std::chrono::steady_clock::now();
-      buff_power_runes = buff_detector.detect(main_img);
+      buff_power_runes = active_buff_detector.detect(main_img);
       const auto buff_detect_end = std::chrono::steady_clock::now();
 
+      if (energy_type == auto_buff::EnergyType::BIG && buff_power_runes.has_value()) {
+        double_board_controller.updateSelection(buff_power_runes.value(), main_timestamp);
+      }
+
+      const bool should_solve =
+        buff_power_runes.has_value() &&
+        (energy_type == auto_buff::EnergyType::SMALL || selected_board_is_lit(buff_power_runes.value()));
       const auto buff_solve_start = std::chrono::steady_clock::now();
-      buff_solver.solve(buff_power_runes);
+      if (should_solve) {
+        buff_solver.solve(buff_power_runes);
+      }
       const auto buff_solve_end = std::chrono::steady_clock::now();
 
       const auto buff_aim_start = std::chrono::steady_clock::now();
-      if (gimbal_mode == io::small_buff) {
-        buff_small_target.get_target(buff_power_runes, main_timestamp);
-        if (!buff_small_target.is_unsolve()) {
+      if (energy_type == auto_buff::EnergyType::SMALL) {
+        buff_small_target->get_target(buff_power_runes, main_timestamp, energy_type, nullptr);
+        if (!buff_small_target->is_unsolve()) {
           buff_target_solved = true;
-          command =
-            buff_aimer.aim(buff_small_target, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
+          command = buff_aimer.aim(
+            *buff_small_target, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
+          command.shoot = false;
         }
       } else {
-        buff_big_target.get_target(buff_power_runes, main_timestamp);
-        if (!buff_big_target.is_unsolve()) {
+        std::optional<auto_buff::PowerRune> tracking_power_runes;
+        if (buff_power_runes.has_value() && selected_board_is_lit(buff_power_runes.value())) {
+          tracking_power_runes = buff_power_runes;
+        }
+        const auto sin_param = buff_solver.getSinusoidalParam();
+        buff_big_target->get_target(
+          tracking_power_runes, main_timestamp, energy_type, &sin_param);
+        if (!buff_big_target->is_unsolve()) {
           buff_target_solved = true;
           command =
-            buff_aimer.aim(buff_big_target, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
+            buff_aimer.aim(*buff_big_target, main_timestamp, gimbal->bullet_speed(), aimer_to_now);
+          command.shoot = false;
         }
       }
       const auto buff_aim_end = std::chrono::steady_clock::now();
@@ -683,6 +771,7 @@ int main(int argc, char * argv[])
       buff_solve_time_ms = tools::delta_time(buff_solve_end, buff_solve_start) * 1e3;
       buff_aim_time_ms = tools::delta_time(buff_aim_end, buff_aim_start) * 1e3;
     } else if (omni_mode) {
+      // #####-----全向读帧-----#####
       takeover.clear_target();
       auto read_omni_frame = [&](
                                io::USBCamera & camera, cv::Mat & img,
@@ -710,6 +799,7 @@ int main(int argc, char * argv[])
         back_img.release();
       }
 
+      // #####-----全向检测-----#####
       auto t_omni0 = std::chrono::steady_clock::now();
       if (left_frame.has_base_big_yaw && !left_img.empty()) {
         left_frame.result.armors = yolo_omni_left->detect(left_img, frame_count);
@@ -737,6 +827,7 @@ int main(int argc, char * argv[])
       finalize_frame(right_frame, right_cam_cfg, tools::delta_time(t_omni2, t_omni1) * 1e3);
       finalize_frame(back_frame, back_cam_cfg, tools::delta_time(t_omni3, t_omni2) * 1e3);
 
+      // #####-----全向目标选择-----#####
       omni_retarget_cd_active =
         cooldown_anchor_omni_target.has_value() && now < omni_retarget_cooldown_deadline;
       if (omni_retarget_cd_active) {
@@ -817,6 +908,7 @@ int main(int argc, char * argv[])
         }
       }
 
+      // #####-----全向命令超时-----#####
       if (command.control && command.has_target_yaw) {
         if (active_omni_timeout_running && active_omni_timeout_target.has_value()) {
           omni_cmd_timeout_active = true;
@@ -851,6 +943,7 @@ int main(int argc, char * argv[])
         clear_omni_timeout_session();
       }
 
+      // #####-----主相机丢失保持-----#####
       if (main_lost_cmd_hold_running && main_lost_hold_setpoint.has_value()) {
         if (now < main_lost_cmd_hold_deadline) {
           auto hold_setpoint = main_lost_hold_setpoint.value();
@@ -868,6 +961,7 @@ int main(int argc, char * argv[])
         }
       }
 
+      // #####-----全向控制下发-----#####
       if (!main_lost_cmd_hold_applied) {
         auto_aim::SentryMpcSetpoint omni_setpoint;
         omni_setpoint.command = command;
@@ -878,6 +972,7 @@ int main(int argc, char * argv[])
         auto_aim::dispatch_sentry_mpc(*gimbal, omni_setpoint);
       }
     } else {
+      // #####-----主相机MPC-----#####
       left_img.release();
       right_img.release();
       back_img.release();
@@ -946,6 +1041,7 @@ int main(int argc, char * argv[])
         main_tracker_hold_applied = true;
       }
 
+      // #####-----开火决策-----#####
       command = setpoint.command;
       const Eigen::Vector3d motor_ypr{command_gimbal_state.yaw, command_gimbal_state.pitch, 0.0};
       const bool shooter_ready =
@@ -963,6 +1059,7 @@ int main(int argc, char * argv[])
       auto_aim::dispatch_sentry_mpc(*gimbal, setpoint);
     }
 
+    // #####-----调试曲线-----#####
     nlohmann::json data;
     data["mode"] = buff_mode ? 2 : (omni_mode ? 1 : 0);
     data["gimbal_mode"] = gimbal_mode_name(gimbal_mode);
@@ -1029,13 +1126,16 @@ int main(int argc, char * argv[])
         data["buff_yaw"] = p.ypr_in_world[0] * 57.3;
         data["buff_pitch"] = p.ypr_in_world[1] * 57.3;
         data["buff_roll"] = p.ypr_in_world[2] * 57.3;
+        data["buff_selected_board"] = p.selectedBoardIndex();
+        data["buff_candidate_board"] = p.candidateBoardIndex();
+        data["buff_activated_arms"] = p.activated_arms;
       }
 
       const auto_buff::Target & buff_target = gimbal_mode == io::small_buff
                                                 ? static_cast<const auto_buff::Target &>(
-                                                    buff_small_target)
+                                                    *buff_small_target)
                                                 : static_cast<const auto_buff::Target &>(
-                                                    buff_big_target);
+                                                    *buff_big_target);
       if (!buff_target.is_unsolve()) {
         const auto x = buff_target.ekf_x();
         data["buff_target_yaw"] = x[4] * 57.3;
@@ -1099,8 +1199,10 @@ int main(int argc, char * argv[])
     plotter.plot(data);
 
     prev_omni_mode = omni_mode;
+    // #####-----画面显示-----#####
     if (!display) continue;
     if (buff_mode) {
+      const char * energy = gimbal_mode == io::small_buff ? "small" : "big";
       if (buff_power_runes.has_value()) {
         auto & p = buff_power_runes.value();
         for (size_t i = 0; i < std::min<size_t>(4, p.target().points.size()); ++i) {
@@ -1108,13 +1210,24 @@ int main(int argc, char * argv[])
         }
         tools::draw_point(main_img, p.target().center, {0, 0, 255}, 3);
         tools::draw_point(main_img, p.r_center, {0, 255, 255}, 3);
+        tools::draw_text(
+          main_img, fmt::format("Energy: {}", energy), {10, 120}, {180, 255, 180}, 0.8, 2);
+        if (gimbal_mode == io::big_buff) {
+          tools::draw_text(
+            main_img, fmt::format("Selected: {}", board_index_string(p.selectedBoardIndex())),
+            {10, 150}, {0, 255, 0}, 0.8, 2);
+          tools::draw_text(
+            main_img, fmt::format("Candidate: {}", board_index_string(p.candidateBoardIndex())),
+            {10, 180}, {0, 215, 255}, 0.8, 2);
+          if (selected_board_is_lit(p)) {
+            cv::circle(main_img, p.target().center, 24, cv::Scalar(0, 255, 0), 3);
+          }
+        }
+      } else {
+        tools::draw_text(
+          main_img, fmt::format("Energy: {} | no target", energy), {10, 120}, {180, 255, 180}, 0.8,
+          2);
       }
-      tools::draw_text(
-        main_img,
-        fmt::format(
-          "buff {} target={} solved={}", gimbal_mode == io::small_buff ? "small" : "big",
-          buff_power_runes.has_value() ? 1 : 0, buff_target_solved ? 1 : 0),
-        {10, 90}, {180, 255, 180}, 0.8, 2);
     } else {
       draw_auto_aim_overlay(main_img, armors, targets, aimer, solver);
     }

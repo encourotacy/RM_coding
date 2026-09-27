@@ -18,6 +18,9 @@ public:
   Buff_Detector(const std::string & config);
   Buff_Detector(const std::string & config, const std::string & model_key);
 
+  void setEnergyType(EnergyType type);
+  EnergyType getEnergyType() const { return energy_type_; }
+
   std::optional<PowerRune> detect_24(cv::Mat & bgr_img);
 
   std::optional<PowerRune> detect(cv::Mat & bgr_img);
@@ -32,6 +35,9 @@ private:
   cv::Point2f get_r_center(std::vector<FanBlade> & fanblades, cv::Mat & bgr_img);
 
   void handle_lose();
+
+  std::optional<PowerRune> detect_big(cv::Mat & bgr_img);
+  void fill_board_metadata(PowerRune & rune, const std::vector<YOLO11_BUFF::Object> & results) const;
 
   YOLO11_BUFF MODE_;
   Track_status status_;
@@ -50,6 +56,7 @@ private:
   int lose_max_ = 20;                // 连续丢失阈值
   double lastlen_;
   std::optional<PowerRune> last_powerrune_ = std::nullopt;
+  EnergyType energy_type_ = EnergyType::SMALL;
 };
 }  // namespace auto_buff
 #endif  // DETECTOR_HPP
