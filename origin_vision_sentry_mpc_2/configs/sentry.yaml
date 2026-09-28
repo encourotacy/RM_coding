@@ -41,13 +41,13 @@ outpost_max_temp_lost_count: 75
 #####-----aimer参数-----#####
 gimbal_axis_order: pitch_yaw # yaw_pitch: yaw轴在外；pitch_yaw: pitch轴在外
 
-yaw_offset: 2.3 # degree -2.5
-pitch_offset: -3.0 # degree 2
+yaw_offset: 2.8 # degree -2.5
+pitch_offset: -4.0 # degree 2
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 
 decision_speed: 8 # rad/s
-high_speed_delay_time: 0.073 # s
+high_speed_delay_time: -0.08 # s
 low_speed_delay_time: 0.08 # s
 outpost_prediction_offset_s: -0.055 # s，仅前哨站；负值减小提前量
 
