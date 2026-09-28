@@ -45,8 +45,7 @@ yaw_offset: 2.3 # degree -2.5
 pitch_offset: -3.0 # degree 2
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
-resistance_k: 0.023 # 空气阻力系数
-traj_g: 9.7833 # m/s^2，弹道重力加速度
+
 decision_speed: 8 # rad/s
 high_speed_delay_time: 0.073 # s
 low_speed_delay_time: 0.08 # s
@@ -102,9 +101,12 @@ omni_back_yaw_deg: 180.0
 omni_fov_h_deg: 120.0
 omni_fov_v_deg: 67.0
 
-#####-----时序参数-----#####
+#####-----常用参数-----#####
 timing:
-  offset: 0.001 # s，图像时间戳到姿态查询的补偿
+  offset: 0.001 # s，时序参数，图像时间戳到姿态查询的补偿
+
+resistance_k: 0.023 # 空气阻力系数
+traj_g: 9.7833 # m/s^2，弹道重力加速度
 
 #####-----ROS2云台桥参数-----#####
 ros2_gimbal:
