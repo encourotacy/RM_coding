@@ -65,6 +65,8 @@ private:
   std::vector<double> planner_fire_thresh_;
   double low_speed_delay_time_, high_speed_delay_time_, decision_speed_;
   double outpost_prediction_offset_s_;
+  double resistance_k_ = 0.01;
+  double traj_g_ = 9.7833;
   bool high_spin_force_fire_enabled_ = false;
   bool high_spin_force_fire_active_ = false;
   double high_spin_force_fire_enter_speed_ = 8.0;

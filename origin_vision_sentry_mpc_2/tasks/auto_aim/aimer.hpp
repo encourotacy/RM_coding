@@ -40,6 +40,7 @@ private:
   std::optional<double> left_yaw_offset_, right_yaw_offset_;
   double pitch_offset_;
   double resistance_k_;
+  double traj_g_;
   double comming_angle_;
   double leaving_angle_;
   double high_speed_delay_time_;

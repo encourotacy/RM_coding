@@ -13,7 +13,8 @@ struct Trajectory
   // d 目标水平距离，单位：m
   // h 目标竖直高度，单位：m
   // k 空气阻力系数，接近 0 时退化为无空气阻力模型
-  Trajectory(double v0, double d, double h, double k = 0.01);
+  // g 重力加速度，单位：m/s^2
+  Trajectory(double v0, double d, double h, double k = 0.01, double g = 9.7833);
 };
 
 }  // namespace tools

@@ -28,6 +28,7 @@ Aimer::Aimer(const std::string & config_path)
   comming_angle_ = yaml["comming_angle"].as<double>() / 57.3;
   leaving_angle_ = yaml["leaving_angle"].as<double>() / 57.3;
   resistance_k_ = yaml["resistance_k"].as<double>(0.01);
+  traj_g_ = yaml["traj_g"].as<double>(9.7833);
   high_speed_delay_time_ = yaml["high_speed_delay_time"].as<double>();
   low_speed_delay_time_ = yaml["low_speed_delay_time"].as<double>();
   outpost_prediction_offset_s_ = yaml["outpost_prediction_offset_s"].as<double>(0.0);
@@ -79,7 +80,7 @@ io::Command Aimer::aim_with_yaw_offset(
 
   const Eigen::Vector3d xyz0 = aim_point0.xyza.head(3);
   const auto d0 = std::sqrt(xyz0[0] * xyz0[0] + xyz0[1] * xyz0[1]);
-  tools::Trajectory trajectory0(bullet_speed, d0, xyz0[2], resistance_k_);
+  tools::Trajectory trajectory0(bullet_speed, d0, xyz0[2], resistance_k_, traj_g_);
   if (trajectory0.unsolvable) {
     tools::logger()->debug(
       "[Aimer] Unsolvable trajectory0: {:.2f} {:.2f} {:.2f}", bullet_speed, d0, xyz0[2]);
@@ -112,7 +113,7 @@ io::Command Aimer::aim_with_yaw_offset(
 
     const Eigen::Vector3d xyz = aim_point.xyza.head(3);
     const double d = std::sqrt(xyz.x() * xyz.x() + xyz.y() * xyz.y());
-    current_traj = tools::Trajectory(bullet_speed, d, xyz.z(), resistance_k_);
+    current_traj = tools::Trajectory(bullet_speed, d, xyz.z(), resistance_k_, traj_g_);
 
     if (current_traj.unsolvable) {
       tools::logger()->debug(

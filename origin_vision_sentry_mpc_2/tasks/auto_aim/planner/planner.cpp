@@ -42,6 +42,8 @@ Planner::Planner(const std::string & config_path)
   low_speed_delay_time_ = tools::read<double>(yaml, "low_speed_delay_time");
   outpost_prediction_offset_s_ = yaml["outpost_prediction_offset_s"].as<double>(0.0);
   if (!std::isfinite(outpost_prediction_offset_s_)) outpost_prediction_offset_s_ = 0.0;
+  resistance_k_ = yaml["resistance_k"].as<double>(0.01);
+  traj_g_ = yaml["traj_g"].as<double>(9.7833);
   high_spin_force_fire_enabled_ =
     yaml["high_spin_force_fire_enabled"] && yaml["high_spin_force_fire_enabled"].as<bool>();
   high_spin_force_fire_enter_speed_ = yaml["high_spin_force_fire_enter_speed"].as<double>(8.0);
@@ -123,7 +125,7 @@ Plan Planner::plan_impl(
     const Eigen::Vector3d xyz = selected_aim_point.head<3>();
     const double min_dist = xyz.head<2>().norm();
     fire_distance = min_dist;
-    auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
+    auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z(), resistance_k_, traj_g_);
     if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
     target.predict(bullet_traj.fly_time);
 
@@ -347,7 +349,7 @@ Eigen::Matrix<double, 2, 1> Planner::aim(
   debug_xyza = Eigen::Vector4d(xyz.x(), xyz.y(), xyz.z(), yaw);
 
   auto azim = std::atan2(xyz.y(), xyz.x());
-  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
+  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z(), resistance_k_, traj_g_);
   if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
 
   const double world_yaw = azim + yaw_offset_;
